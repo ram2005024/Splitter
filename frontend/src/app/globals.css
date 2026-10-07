@@ -1,0 +1,373 @@
+@import "tailwindcss";
+
+/* ─── Pure Dark theme (default) ─────────────────────────────────── */
+:root,
+html.dark {
+  color-scheme: dark;
+  --bg-app:         #000000;
+  --bg-base:        #000000;
+  --bg-surface:     #09090b;
+  --bg-elevated:    #111114;
+  --bg-muted:       #18181c;
+
+  --border-default: rgba(255, 255, 255, 0.10);
+  --border-subtle:  rgba(255, 255, 255, 0.05);
+  --border-hover:   rgba(255, 255, 255, 0.22);
+
+  --text-primary:   #fcfcfd;
+  --text-secondary: #a1a1aa;
+  --text-muted:     #71717a;
+  --text-link:      #818cf8;
+
+  --accent:         #6366f1;
+  --accent-hover:   #4f46e5;
+  --accent-shadow:  rgba(99, 102, 241, 0.25);
+  --accent-subtle:  rgba(99, 102, 241, 0.12);
+
+  --success:        #10b981;
+  --warning:        #f59e0b;
+  --danger:         #f43f5e;
+  --info:           #6366f1;
+
+  --card-shadow:           0 4px 24px -2px rgba(0, 0, 0, 0.9), 0 1px 3px 0 rgba(0, 0, 0, 0.7);
+  --card-inner-highlight:  inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+
+  --skeleton-from:  #111114;
+  --skeleton-to:    #1e1e24;
+
+  --background: var(--bg-base);
+  --foreground: var(--text-primary);
+}
+
+/* ─── Light theme ────────────────────────────────────────────────── */
+html.light {
+  color-scheme: light;
+  --bg-app:         #f1f5f9;
+  --bg-base:        #f1f5f9;
+  --bg-surface:     #f8fafc;
+  --bg-elevated:    #ffffff;
+  --bg-muted:       #e2e8f0;
+
+  --border-default: #e2e8f0;
+  --border-subtle:  #f1f5f9;
+  --border-hover:   #cbd5e1;
+
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #64748b;
+  --text-link:      #4f46e5;
+
+  --accent:         #6366f1;
+  --accent-hover:   #4f46e5;
+  --accent-shadow:  rgba(99, 102, 241, 0.18);
+  --accent-subtle:  rgba(99, 102, 241, 0.08);
+
+  --success:        #059669;
+  --warning:        #d97706;
+  --danger:         #e11d48;
+  --info:           #4f46e5;
+
+  --card-shadow:           0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 4px 16px -2px rgba(0, 0, 0, 0.06);
+  --card-inner-highlight:  inset 0 1px 0 0 rgba(255, 255, 255, 1);
+
+  --skeleton-from:  #f1f5f9;
+  --skeleton-to:    #e2e8f0;
+
+  --background: var(--bg-base);
+  --foreground: var(--text-primary);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+/* ─── Base styles ────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  letter-spacing: -0.012em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* ─── Skeleton shimmer animation ─────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-from) 25%,
+    var(--skeleton-to)   50%,
+    var(--skeleton-from) 75%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s infinite linear;
+}
+
+/* ─── Theme transition ───────────────────────────────────────────── */
+/* Only transition color-related properties on elements that support it.
+   Intentionally excludes background-color to prevent white flash on
+   newly mounted components (dialogs, popovers, dropdowns). */
+*,
+*::before,
+*::after {
+  transition-property: border-color, color, fill, stroke, box-shadow, opacity;
+  transition-duration: 0.2s;
+  transition-timing-function: ease;
+}
+
+/* Body gets the smooth bg transition explicitly */
+body {
+  transition: background-color 0.3s ease, color 0.2s ease;
+}
+
+/* Exclude animations from the global transition override */
+.animate-spin,
+.animate-pulse,
+.skeleton-shimmer {
+  transition: none !important;
+}
+
+/* ─── Scrollbar theming ──────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ─── Micro-animation utilities ──────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scaleUp {
+  from { opacity: 0; transform: scale(0.96) translateY(-2px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes popIn {
+  0%   { opacity: 0; transform: scale(0.92); }
+  70%  { transform: scale(1.02); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.animate-fadeIn  { animation: fadeIn  0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.animate-scaleUp { animation: scaleUp 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.animate-slideUp { animation: slideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.animate-popIn   { animation: popIn   0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+/* ─── Selection color ────────────────────────────────────────────── */
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   APP LOADER
+   Full-screen loading screen with branded animation and developer
+   credit for Cyrus AKA. Ram Sharma
+═══════════════════════════════════════════════════════════════════ */
+
+/* ── Entrance keyframes ── */
+@keyframes loader-ring-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes loader-brand-in {
+  0%   { opacity: 0; transform: scale(0.8) translateY(12px); }
+  60%  { opacity: 1; transform: scale(1.04) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes loader-name-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes loader-dot-pulse {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.7); }
+  40%            { opacity: 1;   transform: scale(1); }
+}
+
+@keyframes loader-credit-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 0.72; transform: translateY(0); }
+}
+
+@keyframes loader-glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+  50%      { box-shadow: 0 0 28px 6px rgba(99, 102, 241, 0.28); }
+}
+
+/* ── Brand container ── */
+.loader-brand {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: loader-brand-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Spinning ring ── */
+.loader-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 2.5px solid transparent;
+  border-top-color: var(--accent);
+  border-right-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  animation:
+    loader-ring-spin 1.1s linear infinite,
+    loader-glow-pulse 2s ease-in-out infinite;
+}
+
+/* ── S monogram ── */
+.loader-monogram {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 24px -4px rgba(99, 102, 241, 0.45),
+              inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.loader-monogram span {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  user-select: none;
+}
+
+/* ── App name ── */
+.loader-appname {
+  margin-top: 1.25rem;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  animation: loader-name-in 0.5s 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Progress dots ── */
+.loader-dots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 1.5rem;
+  animation: loader-name-in 0.5s 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.loader-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: var(--accent);
+  animation: loader-dot-pulse 1.2s ease-in-out infinite both;
+}
+
+/* ── Developer credit ── */
+.loader-credit {
+  position: absolute;
+  bottom: clamp(1.5rem, 4vh, 2.5rem);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  animation: loader-credit-in 0.7s 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+  pointer-events: none;
+}
+
+.loader-credit-label {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.loader-credit-name {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  /* Subtle gradient shimmer to make it feel premium */
+  background: linear-gradient(
+    90deg,
+    var(--text-secondary) 0%,
+    var(--accent) 50%,
+    var(--text-secondary) 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Footer credit name ───────────────────────────────────────────── */
+.footer-credit-name {
+  background: linear-gradient(
+    90deg,
+    var(--text-secondary) 0%,
+    var(--accent) 55%,
+    var(--text-secondary) 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  transition: background-position 0.4s ease;
+}
+
+.footer-credit-name:hover {
+  background-position: -50% center;
+}
+

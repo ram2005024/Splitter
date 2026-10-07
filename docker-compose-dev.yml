@@ -1,0 +1,141 @@
+# =============================================================================
+# docker-compose-dev.yml (Alias to docker-compose.dev.yml)
+# =============================================================================
+name: splitter-dev
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: development
+    container_name: splitter_api_dev
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - /app/.venv
+    ports:
+      - "${API_PORT:-8001}:8000"
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=True
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-splitter_db}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - SMTP_HOST=mailpit
+      - SMTP_PORT=1025
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - splitter_dev_net
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: development
+    container_name: splitter_celery_worker_dev
+    command: celery -A app.core.celery_app worker --loglevel=debug
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - /app/.venv
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=True
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-splitter_db}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - SMTP_HOST=mailpit
+      - SMTP_PORT=1025
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - splitter_dev_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: splitter_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-splitter_db}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-splitter_db}"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+    networks:
+      - splitter_dev_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: splitter_redis_dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+    networks:
+      - splitter_dev_net
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: splitter_mailpit_dev
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - splitter_dev_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: splitter_frontend_dev
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3001}:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8001
+    depends_on:
+      - api
+    networks:
+      - splitter_dev_net
+
+volumes:
+  postgres_dev_data:
+    driver: local
+  redis_dev_data:
+    driver: local
+
+networks:
+  splitter_dev_net:
+    driver: bridge

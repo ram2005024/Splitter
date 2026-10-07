@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python & Caches
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.installed.cfg
+*.egg
+
+# Virtual environments (CRITICAL: never copy host venv into Linux containers)
+.venv
+venv
+env
+ENV
+
+# Testing & Coverage
+.pytest_cache
+.coverage
+htmlcov
+.tox
+
+# IDE & Editor configs
+.vscode
+.idea
+*.swp
+*.swo
+
+# Environment & Local secrets
+.env
+*.local
+*.log
+
+# Documentation / Scratch
+brain
+scratch
