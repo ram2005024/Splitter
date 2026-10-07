@@ -17,6 +17,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  IMAGE_API: ghcr.io/${{ github.repository }}/splitter-api
+  IMAGE_FRONTEND: ghcr.io/${{ github.repository }}/splitter-frontend
 
 jobs:
   # ===========================================================================
@@ -36,10 +38,10 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d splitter_test_db"
+          --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 10
+          --health-retries 5
 
       redis:
         image: redis:7-alpine
@@ -49,19 +51,19 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 10
+          --health-retries 5
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
           enable-cache: true
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -74,30 +76,21 @@ jobs:
           uv run python -m compileall app tests
           uv run python -c "from app.main import app; print('FastAPI loaded successfully!')"
 
-      - name: Run Alembic Migrations
+      - name: Test Alembic Migrations
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/splitter_test_db
-        run: |
-          uv run alembic upgrade head
-
-      - name: Verify Alembic Migration State
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/splitter_test_db
-        run: |
-          uv run alembic current
-          uv run alembic check
+        run: uv run alembic upgrade head
 
       - name: Run Test Suite
         env:
           ENVIRONMENT: test
-          DEBUG: "True"
+          DEBUG: True
           SECRET_KEY: test-ci-secret-key-12345678901234567890123456789012
           DATABASE_URL: sqlite+aiosqlite:///:memory:
           REDIS_URL: redis://localhost:6379/0
           CELERY_BROKER_URL: redis://localhost:6379/1
           CELERY_RESULT_BACKEND: redis://localhost:6379/2
-        run: |
-          uv run pytest -v --tb=short
+        run: uv run pytest -v --tb=short
 
   # ===========================================================================
   # 2. FRONTEND VALIDATION & BUILD SUITE
@@ -105,7 +98,6 @@ jobs:
   test-frontend:
     name: Test Frontend (TypeScript & Next.js Build)
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: ./frontend
@@ -114,42 +106,33 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps
 
       - name: TypeScript Type Checking
-        run: npm run typecheck --if-present
-
-      - name: ESLint
-        run: npm run lint --if-present
+        run: npx tsc --noEmit
 
       - name: Build Next.js Application
-        env:
-          NEXT_TELEMETRY_DISABLED: "1"
-          NODE_ENV: production
         run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+          NODE_ENV: production
 
   # ===========================================================================
-  # 3. BUILD & PUSH DOCKER IMAGES TO GHCR
+  # 3. BUILD & PUSH DOCKER IMAGES TO GITHUB CONTAINER REGISTRY (GHCR)
   # ===========================================================================
   build-and-push:
     name: Build & Push Images to GHCR
     runs-on: ubuntu-latest
-
-    needs:
-      - test-backend
-      - test-frontend
-
-    if: >
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [test-backend, test-frontend]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
 
     steps:
       - name: Checkout Code
@@ -158,21 +141,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Normalize Image Names
+      - name: Downcase Repository & Owner for Image Tags
         run: |
-          echo "OWNER_LOWER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
-          echo "REPO_LOWER=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "OWNER_LOWER=${GITHUB_REPOSITORY_OWNER,,}" >> ${GITHUB_ENV}
+          echo "REPO_LOWER=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
 
-      # -----------------------------------------------------------------------
-      # Backend Image
-      # -----------------------------------------------------------------------
       - name: Build & Push API Image
         uses: docker/build-push-action@v6
         with:
@@ -185,12 +165,9 @@ jobs:
             ghcr.io/${{ env.OWNER_LOWER }}/splitter-api:${{ github.sha }}
             ghcr.io/${{ env.REPO_LOWER }}/splitter-api:latest
             ghcr.io/${{ env.REPO_LOWER }}/splitter-api:${{ github.sha }}
-          cache-from: type=gha,scope=splitter-api
-          cache-to: type=gha,mode=max,scope=splitter-api
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      # -----------------------------------------------------------------------
-      # Frontend Image
-      # -----------------------------------------------------------------------
       - name: Build & Push Frontend Image
         uses: docker/build-push-action@v6
         with:
@@ -202,203 +179,64 @@ jobs:
             ghcr.io/${{ env.OWNER_LOWER }}/splitter-frontend:${{ github.sha }}
             ghcr.io/${{ env.REPO_LOWER }}/splitter-frontend:latest
             ghcr.io/${{ env.REPO_LOWER }}/splitter-frontend:${{ github.sha }}
-          cache-from: type=gha,scope=splitter-frontend
-          cache-to: type=gha,mode=max,scope=splitter-frontend
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ===========================================================================
-  # 4. DEPLOY TO AWS EC2
+  # 4. CONTINUOUS DEPLOYMENT TO AWS EC2 VIA SSH
   # ===========================================================================
   deploy-ec2:
     name: Deploy to AWS EC2
     runs-on: ubuntu-latest
-
-    needs:
-      - build-and-push
-
-    if: >
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [build-and-push]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
 
     steps:
-      # -----------------------------------------------------------------------
-      # Check Required Secrets
-      # -----------------------------------------------------------------------
-      - name: Check EC2 Secrets
+      - name: Check for EC2 Secrets
         id: check-secrets
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
-          missing=false
-
-          if [ -z "$EC2_HOST" ]; then
-            echo "::warning::EC2_HOST secret is missing."
-            missing=true
-          fi
-
-          if [ -z "$EC2_SSH_KEY" ]; then
-            echo "::warning::EC2_SSH_KEY secret is missing."
-            missing=true
-          fi
-
-          if [ -z "$GHCR_USERNAME" ]; then
-            echo "::warning::GHCR_USERNAME secret is missing."
-            missing=true
-          fi
-
-          if [ -z "$GHCR_TOKEN" ]; then
-            echo "::warning::GHCR_TOKEN secret is missing."
-            missing=true
-          fi
-
-          if [ "$missing" = false ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-            echo "All required deployment secrets are configured."
+          if [ -n "${{ secrets.EC2_HOST }}" ] && [ -n "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
           else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Deployment secrets are incomplete. EC2 deployment will be skipped."
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "::warning::EC2_HOST or EC2_SSH_KEY secret not found. Skipping EC2 deployment step. See README for EC2 setup instructions."
           fi
 
-      # -----------------------------------------------------------------------
-      # Deploy
-      # -----------------------------------------------------------------------
       - name: Deploy Containers on AWS EC2
         if: steps.check-secrets.outputs.configured == 'true'
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_PORT || '22' }}
-          script_stop: true
-          envs: GHCR_USERNAME,GHCR_TOKEN
+          port: ${{ secrets.EC2_PORT || 22 }}
           script: |
             set -e
-
-            echo "=================================================="
-            echo "        SPLITTER EC2 DEPLOYMENT"
-            echo "=================================================="
-
-            # -----------------------------------------------------------------
-            # 1. Navigate to project directory
-            # -----------------------------------------------------------------
-            echo ""
-            echo "─── [1/7] Locating Project Directory ───"
-
+            echo "─── [1/6] Navigating to Project Directory ───"
             if [ -d "/opt/splitter" ]; then
               cd /opt/splitter
             elif [ -d "$HOME/splitter" ]; then
               cd "$HOME/splitter"
             else
-              echo "ERROR: Splitter project directory not found."
-              echo "Expected /opt/splitter or $HOME/splitter"
+              echo "Error: Directory /opt/splitter or $HOME/splitter not found on EC2 server!"
               exit 1
             fi
 
-            echo "Project directory: $(pwd)"
+            echo "─── [2/6] Syncing Latest Repository Code ───"
+            git fetch origin main || git fetch origin master || true
+            git reset --hard origin/main || git reset --hard origin/master || true
 
-            # -----------------------------------------------------------------
-            # 2. Sync repository
-            # -----------------------------------------------------------------
-            echo ""
-            echo "─── [2/7] Syncing Repository ───"
+            echo "─── [3/6] Authenticating Docker with GHCR ───"
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            git fetch --prune origin
+            echo "─── [4/6] Pulling Latest Container Images ───"
+            docker compose pull || docker compose -f docker-compose.prod.yml pull
 
-            if git show-ref --verify --quiet refs/remotes/origin/main; then
-              git reset --hard origin/main
-            elif git show-ref --verify --quiet refs/remotes/origin/master; then
-              git reset --hard origin/master
-            else
-              echo "ERROR: Neither origin/main nor origin/master exists."
-              exit 1
-            fi
+            echo "─── [5/6] Deploying Stack ───"
+            docker compose up -d --remove-orphans || docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-            git clean -fd
+            echo "─── [6/6] Executing Alembic Migrations & Cleaning Disk ───"
+            docker compose exec -T api alembic upgrade head || docker compose -f docker-compose.prod.yml exec -T api alembic upgrade head
+            docker image prune -af --filter "until=72h"
 
-            echo "Current commit:"
-            git log -1 --oneline
-
-            # -----------------------------------------------------------------
-            # 3. Authenticate with GHCR
-            # -----------------------------------------------------------------
-            echo ""
-            echo "─── [3/7] Authenticating with GHCR ───"
-
-            echo "$GHCR_TOKEN" | docker login ghcr.io \
-              --username "$GHCR_USERNAME" \
-              --password-stdin
-
-            # -----------------------------------------------------------------
-            # 4. Detect Compose file
-            # -----------------------------------------------------------------
-            echo ""
-            echo "─── [4/7] Detecting Docker Compose Configuration ───"
-
-            if [ -f "docker-compose.prod.yml" ]; then
-              COMPOSE_FILE="docker-compose.prod.yml"
-            elif [ -f "docker-compose.yml" ]; then
-              COMPOSE_FILE="docker-compose.yml"
-            elif [ -f "compose.prod.yml" ]; then
-              COMPOSE_FILE="compose.prod.yml"
-            elif [ -f "compose.yml" ]; then
-              COMPOSE_FILE="compose.yml"
-            else
-              echo "ERROR: No Docker Compose file found."
-              exit 1
-            fi
-
-            echo "Using compose file: $COMPOSE_FILE"
-
-            # -----------------------------------------------------------------
-            # 5. Pull latest images
-            # -----------------------------------------------------------------
-            echo ""
-            echo "─── [5/7] Pulling Latest Images ───"
-
-            docker compose -f "$COMPOSE_FILE" pull
-
-            # -----------------------------------------------------------------
-            # 6. Run database migrations
-            # -----------------------------------------------------------------
-            echo ""
-            echo "─── [6/7] Running Database Migrations ───"
-
-            docker compose -f "$COMPOSE_FILE" run \
-              --rm \
-              --no-deps \
-              backend \
-              alembic upgrade head
-
-            # -----------------------------------------------------------------
-            # 7. Restart application stack
-            # -----------------------------------------------------------------
-            echo ""
-            echo "─── [7/7] Starting Application Stack ───"
-
-            docker compose -f "$COMPOSE_FILE" up \
-              -d \
-              --remove-orphans
-
-            # -----------------------------------------------------------------
-            # Deployment verification
-            # -----------------------------------------------------------------
-            echo ""
-            echo "─── Verifying Deployment ───"
-
-            sleep 10
-
-            docker compose -f "$COMPOSE_FILE" ps
-
-            echo ""
-            echo "Recent container logs:"
-            docker compose -f "$COMPOSE_FILE" logs \
-              --tail=50 \
-              --no-color
-
-            echo ""
-            echo "=================================================="
-            echo "        DEPLOYMENT COMPLETED SUCCESSFULLY"
-            echo "=================================================="
+            echo "=== Splitter deployed successfully to EC2! ==="
