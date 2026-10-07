@@ -1,20 +1,17 @@
 "use client";
 
-import { Alert } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import React, { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { createGroupSchema, CreateGroupFormData } from "@/features/groups/schemas";
+import { useCreateGroup } from "@/features/groups/hooks";
+import { useLanguage } from "@/providers/language-provider";
 import { Dialog } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { useCreateGroup } from "@/features/groups/hooks";
-import {
-  CreateGroupFormData,
-  createGroupSchema,
-} from "@/features/groups/schemas";
+import { Alert } from "@/components/ui/alert";
 import { NormalizedError } from "@/lib/api/errors";
-import { useLanguage } from "@/providers/language-provider";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useState } from "react";
-import { useForm } from "react-hook-form";
 
 interface CreateGroupDialogProps {
   isOpen: boolean;
@@ -22,11 +19,7 @@ interface CreateGroupDialogProps {
   onSuccess?: (groupId: string) => void;
 }
 
-export function CreateGroupDialog({
-  isOpen,
-  onClose,
-  onSuccess,
-}: CreateGroupDialogProps) {
+export function CreateGroupDialog({ isOpen, onClose, onSuccess }: CreateGroupDialogProps) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const createGroupMutation = useCreateGroup();
   const { language, t } = useLanguage();
@@ -65,11 +58,7 @@ export function CreateGroupDialog({
     <Dialog
       isOpen={isOpen}
       onClose={onClose}
-      title={
-        language === "ne"
-          ? "नयाँ खर्च समूह बनाउनुहोस्"
-          : "Create New Expense Group"
-      }
+      title={language === "ne" ? "नयाँ खर्च समूह बनाउनुहोस्" : "Create New Expense Group"}
       description={
         language === "ne"
           ? "यात्रा, कोठाका साथी वा परियोजनाको खर्च ट्र्याक गर्नुहोस्"
@@ -85,11 +74,7 @@ export function CreateGroupDialog({
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <Input
           label={t("groupName")}
-          placeholder={
-            language === "ne"
-              ? "जस्तै: पोखरा भ्रमण, कोठा ३ बी"
-              : "e.g. Pokhara Trip, Flat 3B"
-          }
+          placeholder={language === "ne" ? "जस्तै: पोखरा भ्रमण, कोठा ३ बी" : "e.g. Pokhara Trip, Flat 3B"}
           error={errors.name?.message}
           {...register("name")}
         />
@@ -97,7 +82,9 @@ export function CreateGroupDialog({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Select
             label={t("currency")}
-            options={[{ value: "NPR", label: "NPR (रू) — Nepalese Rupee" }]}
+            options={[
+              { value: "NPR", label: "NPR (रू) — Nepalese Rupee" },
+            ]}
             helperText={t("currencyFixedNote")}
             {...register("currency")}
           />
@@ -105,27 +92,11 @@ export function CreateGroupDialog({
           <Select
             label={t("groupCategory")}
             options={[
-              {
-                value: "TRIP",
-                label: language === "ne" ? "यात्रा / भ्रमण" : "Trip / Travel",
-              },
-              {
-                value: "HOME",
-                label:
-                  language === "ne" ? "घर / कोठाका साथी" : "Home / Flatmates",
-              },
-              {
-                value: "COUPLE",
-                label: language === "ne" ? "दम्पती" : "Couple",
-              },
-              {
-                value: "PROJECT",
-                label: language === "ne" ? "परियोजना / काम" : "Project / Work",
-              },
-              {
-                value: "OTHER",
-                label: language === "ne" ? "अन्य" : "Other / General",
-              },
+              { value: "TRIP", label: language === "ne" ? "यात्रा / भ्रमण" : "Trip / Travel" },
+              { value: "HOME", label: language === "ne" ? "घर / कोठाका साथी" : "Home / Flatmates" },
+              { value: "COUPLE", label: language === "ne" ? "दम्पती" : "Couple" },
+              { value: "PROJECT", label: language === "ne" ? "परियोजना / काम" : "Project / Work" },
+              { value: "OTHER", label: language === "ne" ? "अन्य" : "Other / General" },
             ]}
             error={errors.group_type?.message}
             {...register("group_type")}
