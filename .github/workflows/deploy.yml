@@ -249,6 +249,8 @@ jobs:
             git fetch origin "$TARGET_BRANCH" --depth 1 || git fetch origin "$TARGET_BRANCH"
             git reset --hard "origin/$TARGET_BRANCH"
 
+            OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
             if [ ! -f ".env" ]; then
               echo "Notice: .env not found on EC2. Initializing from .env.production.example..."
               if [ -f ".env.production.example" ]; then
@@ -258,11 +260,21 @@ jobs:
               fi
             fi
 
+            # Automatically fix any placeholder owner in existing .env
+            if [ -f ".env" ]; then
+              sed -i "s|ghcr.io/your-github-username|ghcr.io/${OWNER_LOWER}|g" .env
+              sed -i "s|your-github-username|${OWNER_LOWER}|g" .env
+            fi
+
+            # Explicitly export the exact GHCR images for docker compose
+            export GHCR_IMAGE_API="ghcr.io/${OWNER_LOWER}/splitter-api:latest"
+            export GHCR_IMAGE_FRONTEND="ghcr.io/${OWNER_LOWER}/splitter-frontend:latest"
+
             # Auto-detect whether docker command requires sudo
             DOCKER_BIN="docker"
             if ! docker info >/dev/null 2>&1; then
               if sudo -n docker info >/dev/null 2>&1 || sudo docker info >/dev/null 2>&1; then
-                DOCKER_BIN="sudo docker"
+                DOCKER_BIN="sudo -E docker"
               fi
             fi
 
