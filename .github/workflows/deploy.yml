@@ -223,11 +223,13 @@ jobs:
             fi
 
             echo "─── [2/6] Syncing Latest Repository Code ───"
-            git fetch origin main || git fetch origin master || true
-            git reset --hard origin/main || git reset --hard origin/master || true
+            TARGET_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "master")
+            git fetch origin "$TARGET_BRANCH"
+            git reset --hard "origin/$TARGET_BRANCH"
 
             echo "─── [3/6] Authenticating Docker with GHCR ───"
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            GHCR_PASS="${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}"
+            echo "$GHCR_PASS" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
 
             echo "─── [4/6] Pulling Latest Container Images ───"
             docker compose pull || docker compose -f docker-compose.prod.yml pull
