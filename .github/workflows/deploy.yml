@@ -281,6 +281,13 @@ jobs:
               sed -i "s|UVICORN_WORKERS=4|UVICORN_WORKERS=2|g" .env
             fi
 
+            # Export all variables from .env so docker compose interpolation never falls back to defaults
+            if [ -f ".env" ]; then
+              set -a
+              . ./.env
+              set +a
+            fi
+
             # Explicitly export the exact GHCR images for docker compose
             export GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest"
             export GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest"
@@ -298,10 +305,10 @@ jobs:
             echo "$GHCR_PASS" | $DOCKER_BIN login ghcr.io -u "ram2005024" --password-stdin || true
 
             echo "─── [4/6] Pulling Latest Container Images ───"
-            GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest" GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest" $DOCKER_BIN compose -f docker-compose.prod.yml pull || $DOCKER_BIN compose pull
+            GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest" GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest" $DOCKER_BIN compose --env-file .env -f docker-compose.prod.yml pull || $DOCKER_BIN compose pull
 
             echo "─── [5/6] Deploying Stack ───"
-            GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest" GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest" $DOCKER_BIN compose -f docker-compose.prod.yml up -d --remove-orphans || $DOCKER_BIN compose up -d --remove-orphans
+            GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest" GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest" $DOCKER_BIN compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans || $DOCKER_BIN compose up -d --remove-orphans
 
             # Brief pause and restart nginx to ensure fresh upstream resolution
             sleep 3
