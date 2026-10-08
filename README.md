@@ -327,8 +327,8 @@ If you prefer running the Python process directly on your host machine:
 In production, the application **does not compile or build images on the production host**. Doing so can starve small or medium cloud instances (like AWS `t2.micro` or `t3.small`) of RAM and CPU during intensive frontend compilation (`npm run build`).
 
 Instead, the CI/CD pipeline builds hardened, multi-stage production images and publishes them to **GitHub Container Registry (GHCR)**:
-- **Backend API & Celery Worker**: `ghcr.io/<your-github-username>/splitter-api:latest`
-- **Next.js Frontend**: `ghcr.io/<your-github-username>/splitter-frontend:latest`
+- **Backend API & Celery Worker**: `ghcr.io/ram2005024/splitter-api:latest`
+- **Next.js Frontend**: `ghcr.io/ram2005024/splitter-frontend:latest`
 
 The production compose configuration (`docker-compose.prod.yml` and `docker-compose.yml`) pulls these pre-built images directly from GHCR.
 
@@ -449,8 +449,8 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
      openssl rand -hex 32
      ```
    - `POSTGRES_PASSWORD`: Set a strong database password.
-   - `GHCR_IMAGE_API`: `ghcr.io/<your-github-username>/splitter-api:latest`
-   - `GHCR_IMAGE_FRONTEND`: `ghcr.io/<your-github-username>/splitter-frontend:latest`
+   - `GHCR_IMAGE_API`: `ghcr.io/ram2005024/splitter-api:latest`
+   - `GHCR_IMAGE_FRONTEND`: `ghcr.io/ram2005024/splitter-frontend:latest`
    - `ALLOWED_ORIGINS`: `http://<YOUR_EC2_PUBLIC_IP>,https://yourdomain.com`
    - `SMTP_...`: Your production SMTP credentials (Gmail App Password, Resend API key, or SendGrid) to send real transactional emails.
 
@@ -469,7 +469,7 @@ If your GitHub repository or packages are private, authenticate your EC2 Docker 
 
 2. On your EC2 terminal, log into GHCR:
    ```bash
-   echo "ghp_YOUR_TOKEN_HERE" | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
+   echo "ghp_YOUR_TOKEN_HERE" | docker login ghcr.io -u ram2005024 --password-stdin
    ```
    *(You should see: `Login Succeeded`)*.
 
@@ -528,8 +528,8 @@ The project uses **GitHub Container Registry (ghcr.io)** to host OCI container i
 
 #### Package Naming Convention
 Image tags published by the pipeline follow this naming format:
-- `ghcr.io/<owner>/splitter-api:latest` & `ghcr.io/<owner>/splitter-api:<git-commit-sha>`
-- `ghcr.io/<owner>/splitter-frontend:latest` & `ghcr.io/<owner>/splitter-frontend:<git-commit-sha>`
+- `ghcr.io/ram2005024/splitter-api:latest` & `ghcr.io/ram2005024/splitter-api:<git-commit-sha>`
+- `ghcr.io/ram2005024/splitter-frontend:latest` & `ghcr.io/ram2005024/splitter-frontend:<git-commit-sha>`
 
 #### Making Packages Public (Optional)
 By default, newly published GHCR packages inherit private permissions. To allow pulling without entering credentials:
@@ -560,7 +560,7 @@ Whenever code is pushed to the `main` (or `master`) branch:
                  ▼
 ┌─────────────────────────────────┐
 │  Job 3: Build & Push to GHCR    │  Builds hardened multi-stage Docker images with Buildx
-└────────────────┬────────────────┘  and pushes to ghcr.io/<owner>/splitter-(api|frontend)
+└────────────────┬────────────────┘  and pushes to ghcr.io/ram2005024/splitter-(api|frontend)
                  │
                  ▼
 ┌─────────────────────────────────┐
