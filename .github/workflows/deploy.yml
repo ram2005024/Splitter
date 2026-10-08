@@ -316,7 +316,14 @@ jobs:
 
             echo "─── [6/6] Executing Database Migrations & Status Inspection ───"
             $DOCKER_BIN compose -f docker-compose.prod.yml exec -T api alembic upgrade head || true
-            $DOCKER_BIN image prune -af --filter "until=72h" || true
+
+            echo "─── Purging Superseded & Unused Docker Images ───"
+            $DOCKER_BIN container prune -f || true
+            $DOCKER_BIN image prune -af || true
+            $DOCKER_BIN builder prune -af || true
+
+            echo "─── Docker Disk Usage Summary ───"
+            $DOCKER_BIN system df || true
 
             echo "─── Container Health & Status ───"
             $DOCKER_BIN compose -f docker-compose.prod.yml ps

@@ -499,7 +499,14 @@ If your GitHub repository or packages are private, authenticate your EC2 Docker 
    docker compose -f docker-compose.prod.yml exec api alembic current
    ```
 
-5. **Test public access**:
+5. **Clean unused images & check disk space**:
+   Whenever new `:latest` images are pulled, previous images become unused. Free up disk space with:
+   ```bash
+   docker image prune -af
+   docker system df
+   ```
+
+6. **Test public access**:
    Open your browser and visit: `http://<YOUR_EC2_PUBLIC_IP>`. You will see the Splitter application fully running!
 
 ---
