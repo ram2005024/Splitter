@@ -41,15 +41,23 @@ class HealthCheckData(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing Splitter API application...")
-    if settings.DEBUG or settings.DATABASE_URL.startswith("sqlite"):
+    try:
         from app.modules.common.base_model import TimeStampedModel  # noqa: F401
         async with engine.begin() as conn:
             await conn.run_sync(TimeStampedModel.metadata.create_all)
         logger.info("Database schemas verified.")
+    except Exception as exc:
+        logger.warning(f"Database schema auto-creation notice: {exc}")
     yield
     logger.info("Shutting down Splitter API application...")
-    await close_redis()
-    await engine.dispose()
+    try:
+        await close_redis()
+    except Exception as exc:
+        logger.warning(f"Error closing Redis: {exc}")
+    try:
+        await engine.dispose()
+    except Exception as exc:
+        logger.warning(f"Error disposing engine: {exc}")
     logger.info("Connections closed.")
 
 

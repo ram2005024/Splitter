@@ -264,12 +264,21 @@ jobs:
               fi
             fi
 
-            # Automatically configure ram2005024 in .env
+            # Automatically configure ram2005024 and sanitize .env
             if [ -f ".env" ]; then
               sed -i "s|ghcr.io/your-github-username|ghcr.io/ram2005024|g" .env
               sed -i "s|your-github-username|ram2005024|g" .env
               grep -q "^GHCR_IMAGE_API=" .env && sed -i "s|^GHCR_IMAGE_API=.*|GHCR_IMAGE_API=ghcr.io/ram2005024/splitter-api:latest|g" .env || echo "GHCR_IMAGE_API=ghcr.io/ram2005024/splitter-api:latest" >> .env
               grep -q "^GHCR_IMAGE_FRONTEND=" .env && sed -i "s|^GHCR_IMAGE_FRONTEND=.*|GHCR_IMAGE_FRONTEND=ghcr.io/ram2005024/splitter-frontend:latest|g" .env || echo "GHCR_IMAGE_FRONTEND=ghcr.io/ram2005024/splitter-frontend:latest" >> .env
+
+              # Ensure postgres credentials align with database container
+              if grep -q "generate_a_strong_database_password_here" .env; then
+                sed -i "s|generate_a_strong_database_password_here|postgres|g" .env
+                sed -i "s|POSTGRES_USER=splitter_user|POSTGRES_USER=postgres|g" .env
+                sed -i "s|splitter_user:postgres|postgres:postgres|g" .env
+              fi
+              # Ensure workers are set safely for t2/t3.micro
+              sed -i "s|UVICORN_WORKERS=4|UVICORN_WORKERS=2|g" .env
             fi
 
             # Explicitly export the exact GHCR images for docker compose
@@ -294,8 +303,18 @@ jobs:
             echo "─── [5/6] Deploying Stack ───"
             GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest" GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest" $DOCKER_BIN compose -f docker-compose.prod.yml up -d --remove-orphans || $DOCKER_BIN compose up -d --remove-orphans
 
-            echo "─── [6/6] Executing Alembic Migrations & Cleaning Disk ───"
-            $DOCKER_BIN compose -f docker-compose.prod.yml exec -T api alembic upgrade head || $DOCKER_BIN compose exec -T api alembic upgrade head || true
+            # Brief pause and restart nginx to ensure fresh upstream resolution
+            sleep 3
+            $DOCKER_BIN compose -f docker-compose.prod.yml restart nginx || true
+
+            echo "─── [6/6] Executing Database Migrations & Status Inspection ───"
+            $DOCKER_BIN compose -f docker-compose.prod.yml exec -T api alembic upgrade head || true
             $DOCKER_BIN image prune -af --filter "until=72h" || true
+
+            echo "─── Container Health & Status ───"
+            $DOCKER_BIN compose -f docker-compose.prod.yml ps
+
+            echo "─── API Logs (Recent) ───"
+            $DOCKER_BIN compose -f docker-compose.prod.yml logs api --tail=25 || true
 
             echo "=== Splitter deployed successfully to EC2! ==="
