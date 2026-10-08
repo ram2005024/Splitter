@@ -36,7 +36,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: splitter_test_db
         ports:
-          - 5432:5432
+          - "5432:5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -46,7 +46,7 @@ jobs:
       redis:
         image: redis:7-alpine
         ports:
-          - 6379:6379
+          - "6379:6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -78,18 +78,18 @@ jobs:
 
       - name: Test Alembic Migrations
         env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/splitter_test_db
+          DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/splitter_test_db"
         run: uv run alembic upgrade head
 
       - name: Run Test Suite
         env:
-          ENVIRONMENT: test
-          DEBUG: True
-          SECRET_KEY: test-ci-secret-key-12345678901234567890123456789012
-          DATABASE_URL: sqlite+aiosqlite:///:memory:
-          REDIS_URL: redis://localhost:6379/0
-          CELERY_BROKER_URL: redis://localhost:6379/1
-          CELERY_RESULT_BACKEND: redis://localhost:6379/2
+          ENVIRONMENT: "test"
+          DEBUG: "True"
+          SECRET_KEY: "test-ci-secret-key-12345678901234567890123456789012"
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          REDIS_URL: "redis://localhost:6379/0"
+          CELERY_BROKER_URL: "redis://localhost:6379/1"
+          CELERY_RESULT_BACKEND: "redis://localhost:6379/2"
         run: uv run pytest -v --tb=short
 
   # ===========================================================================
@@ -122,8 +122,8 @@ jobs:
       - name: Build Next.js Application
         run: npm run build
         env:
-          NEXT_TELEMETRY_DISABLED: 1
-          NODE_ENV: production
+          NEXT_TELEMETRY_DISABLED: "1"
+          NODE_ENV: "production"
 
   # ===========================================================================
   # 3. BUILD & PUSH DOCKER IMAGES TO GITHUB CONTAINER REGISTRY (GHCR)
