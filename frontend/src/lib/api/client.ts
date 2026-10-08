@@ -3,10 +3,14 @@ import { useAuthStore } from "@/stores/auth-store";
 import { refreshAccessToken } from "./refresh";
 import { normalizeApiError } from "./errors";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+// In production behind Nginx, NEXT_PUBLIC_API_URL should be empty or set to
+// the base origin (e.g. https://ec2-xxx.compute.amazonaws.com), and Nginx
+// proxies /api/v1 -> FastAPI. For local dev without Docker, set it to
+// http://localhost:8001 in .env.local.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export const apiClient = axios.create({
-  baseURL: `${API_BASE_URL}/api/v1`,
+  baseURL: API_BASE_URL ? `${API_BASE_URL}/api/v1` : "/api/v1",
   withCredentials: true,
   headers: {
     "Content-Type": "application/json",

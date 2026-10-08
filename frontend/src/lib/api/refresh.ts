@@ -2,7 +2,13 @@ import axios from "axios";
 import { useAuthStore } from "@/stores/auth-store";
 import { APIResponse, TokenResponse } from "@/types/api";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+// In production behind Nginx, NEXT_PUBLIC_API_URL should be empty or the base
+// origin. Nginx proxies /api/v1 -> FastAPI, so a relative path works.
+// For local dev without Docker: set NEXT_PUBLIC_API_URL=http://localhost:8001
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+const REFRESH_URL = API_BASE_URL
+  ? `${API_BASE_URL}/api/v1/auth/refresh`
+  : "/api/v1/auth/refresh";
 
 // Shared promise for concurrent 401 refresh coordination
 let refreshPromise: Promise<string> | null = null;
@@ -21,7 +27,7 @@ export async function refreshAccessToken(): Promise<string> {
     try {
       // Call dedicated refresh endpoint with credentials (HttpOnly cookie included automatically)
       const response = await axios.post<APIResponse<TokenResponse>>(
-        `${API_BASE_URL}/api/v1/auth/refresh`,
+        REFRESH_URL,
         {},
         {
           withCredentials: true,

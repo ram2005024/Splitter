@@ -280,7 +280,7 @@ export default function LandingPage() {
               Sign Up
             </Link>
             <a
-              href="http://localhost:8001/docs"
+              href={`${process.env.NEXT_PUBLIC_API_URL || ""}/docs`}
               target="_blank"
               rel="noreferrer"
               className="hover:opacity-100 transition-opacity"

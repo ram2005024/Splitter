@@ -28,7 +28,15 @@ class Settings(BaseSettings):
     PASSWORD_RESET_CODE_EXPIRE_MINUTES: int = 15
 
     # CORS
-    ALLOWED_ORIGINS: Union[List[str], str] = ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", "http://localhost:8000", "http://localhost:8001"]
+    ALLOWED_ORIGINS: Union[List[str], str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+        "http://localhost:8000",
+        "http://localhost:8001",
+        "http://ec2-13-51-194-166.eu-north-1.compute.amazonaws.com",
+        "https://ec2-13-51-194-166.eu-north-1.compute.amazonaws.com",
+    ]
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
