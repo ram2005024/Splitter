@@ -292,6 +292,11 @@ jobs:
             export GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest"
             export GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest"
 
+            echo "─── Verifying Resolved Configuration ───"
+            echo "  POSTGRES_USER  : ${POSTGRES_USER}"
+            echo "  POSTGRES_DB    : ${POSTGRES_DB}"
+            echo "  DATABASE_URL   : ${DATABASE_URL}" | sed 's|://[^:]*:[^@]*@|://***:***@|'
+
             # Auto-detect whether docker command requires sudo
             DOCKER_BIN="docker"
             if ! docker info >/dev/null 2>&1; then
