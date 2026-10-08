@@ -41,7 +41,7 @@ async def test_register_success_auto_profile_and_verify(client: AsyncClient, moc
     assert body["data"]["is_verified"] is False
     # Requirement 2: Profile must be automatically created
     assert body["data"]["profile"] is not None
-    assert body["data"]["profile"]["default_currency"] == "USD"
+    assert body["data"]["profile"]["default_currency"] == "NPR"
 
     # Verify code was stored in Redis
     otp = await mock_redis.get("verify_code:alice@example.com")
