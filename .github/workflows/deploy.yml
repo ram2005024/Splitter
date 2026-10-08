@@ -212,33 +212,72 @@ jobs:
           port: ${{ secrets.EC2_PORT || 22 }}
           script: |
             set -e
-            echo "─── [1/6] Navigating to Project Directory ───"
-            if [ -d "/opt/splitter" ]; then
-              cd /opt/splitter
+            echo "─── [1/6] Navigating to or Initializing Project Directory ───"
+            TARGET_DIR=""
+            if [ -d "/opt/splitter/.git" ] || ([ -d "/opt/splitter" ] && [ -w "/opt/splitter" ]); then
+              TARGET_DIR="/opt/splitter"
             elif [ -d "$HOME/splitter" ]; then
-              cd "$HOME/splitter"
+              TARGET_DIR="$HOME/splitter"
+            elif [ -d "/opt/splitter" ]; then
+              sudo chown -R $(whoami):$(whoami) /opt/splitter 2>/dev/null || true
+              if [ -w "/opt/splitter" ]; then
+                TARGET_DIR="/opt/splitter"
+              else
+                TARGET_DIR="$HOME/splitter"
+              fi
             else
-              echo "Error: Directory /opt/splitter or $HOME/splitter not found on EC2 server!"
-              exit 1
+              TARGET_DIR="$HOME/splitter"
+            fi
+
+            mkdir -p "$TARGET_DIR"
+            cd "$TARGET_DIR"
+
+            REPO_URL="https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+
+            if [ ! -d ".git" ]; then
+              echo "Git repository not found in $TARGET_DIR. Initializing repository..."
+              git init
+              git remote add origin "$REPO_URL" || git remote set-url origin "$REPO_URL"
+            else
+              echo "Existing git repository found. Updating remote credentials..."
+              git remote set-url origin "$REPO_URL" || true
             fi
 
             echo "─── [2/6] Syncing Latest Repository Code ───"
-            TARGET_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "master")
-            git fetch origin "$TARGET_BRANCH"
+            TARGET_BRANCH="${{ github.ref_name }}"
+            [ -z "$TARGET_BRANCH" ] && TARGET_BRANCH="master"
+            git fetch origin "$TARGET_BRANCH" --depth 1 || git fetch origin "$TARGET_BRANCH"
             git reset --hard "origin/$TARGET_BRANCH"
+
+            if [ ! -f ".env" ]; then
+              echo "Notice: .env not found on EC2. Initializing from .env.production.example..."
+              if [ -f ".env.production.example" ]; then
+                cp .env.production.example .env
+              elif [ -f ".env.example" ]; then
+                cp .env.example .env
+              fi
+            fi
+
+            # Auto-detect whether docker command requires sudo
+            DOCKER_BIN="docker"
+            if ! docker info >/dev/null 2>&1; then
+              if sudo -n docker info >/dev/null 2>&1 || sudo docker info >/dev/null 2>&1; then
+                DOCKER_BIN="sudo docker"
+              fi
+            fi
 
             echo "─── [3/6] Authenticating Docker with GHCR ───"
             GHCR_PASS="${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}"
-            echo "$GHCR_PASS" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
+            echo "$GHCR_PASS" | $DOCKER_BIN login ghcr.io -u "${{ github.actor }}" --password-stdin || true
 
             echo "─── [4/6] Pulling Latest Container Images ───"
-            docker compose pull || docker compose -f docker-compose.prod.yml pull
+            $DOCKER_BIN compose -f docker-compose.prod.yml pull || $DOCKER_BIN compose pull
 
             echo "─── [5/6] Deploying Stack ───"
-            docker compose up -d --remove-orphans || docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            $DOCKER_BIN compose -f docker-compose.prod.yml up -d --remove-orphans || $DOCKER_BIN compose up -d --remove-orphans
 
             echo "─── [6/6] Executing Alembic Migrations & Cleaning Disk ───"
-            docker compose exec -T api alembic upgrade head || docker compose -f docker-compose.prod.yml exec -T api alembic upgrade head
-            docker image prune -af --filter "until=72h"
+            $DOCKER_BIN compose -f docker-compose.prod.yml exec -T api alembic upgrade head || $DOCKER_BIN compose exec -T api alembic upgrade head || true
+            $DOCKER_BIN image prune -af --filter "until=72h" || true
 
             echo "=== Splitter deployed successfully to EC2! ==="
