@@ -1,14 +1,25 @@
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Optional
-from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.modules.common.base_model import TimeStampedModel
 
 if TYPE_CHECKING:
-    from app.modules.users.models import User
     from app.modules.groups.models import Group
+    from app.modules.users.models import User
 
 
 class SplitType(str, enum.Enum):
@@ -21,6 +32,7 @@ class SplitType(str, enum.Enum):
 class ExpenseCategory(str, enum.Enum):
     FOOD_AND_DRINK = "FOOD_AND_DRINK"
     GROCERIES = "GROCERIES"
+    RENT = "RENT"
     TRANSPORTATION = "TRANSPORTATION"
     ENTERTAINMENT = "ENTERTAINMENT"
     ACCOMMODATION = "ACCOMMODATION"
@@ -57,16 +69,18 @@ class Expense(TimeStampedModel):
         default=ExpenseCategory.GENERAL,
         nullable=False,
     )
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     date: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
 
     # Relationships
     group: Mapped["Group"] = relationship("Group", back_populates="expenses")
-    payer: Mapped["User"] = relationship("User", back_populates="expenses_paid", lazy="selectin")
+    payer: Mapped["User"] = relationship(
+        "User", back_populates="expenses_paid", lazy="selectin"
+    )
     splits: Mapped[list["ExpenseSplit"]] = relationship(
         "ExpenseSplit",
         back_populates="expense",
@@ -91,12 +105,14 @@ class ExpenseSplit(TimeStampedModel):
         index=True,
     )
     amount_owed: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    percentage: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
-    shares: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    percentage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    shares: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Relationships
     expense: Mapped["Expense"] = relationship("Expense", back_populates="splits")
-    user: Mapped["User"] = relationship("User", back_populates="splits", lazy="selectin")
+    user: Mapped["User"] = relationship(
+        "User", back_populates="splits", lazy="selectin"
+    )
 
     __table_args__ = (
         UniqueConstraint("expense_id", "user_id", name="uq_expense_user_split"),

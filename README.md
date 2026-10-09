@@ -1,416 +1,321 @@
-# Splitter — Enterprise Expense Splitter Backend API
+# Splitter
 
-[![CI/CD Pipeline](https://github.com/fastapi-practise/splitter/actions/workflows/ci.yml/badge.svg)](https://github.com/fastapi-practise/splitter/actions)
+Splitter is a group expense manager. You create a group, add expenses, split them in several ways, and settle up with the fewest possible payments. It has a FastAPI backend, a Next.js frontend, and a full CI/CD pipeline that deploys to AWS EC2.
+
+[![CI/CD](https://github.com/ram2005024/Splitter/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/ram2005024/Splitter/actions)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg?logo=fastapi)](https://fastapi.tiangolo.com)
-[![SQLAlchemy 2.0](https://img.shields.io/badge/SQLAlchemy-2.0%20Async-d71f00.svg)](https://www.sqlalchemy.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg?logo=postgresql)](https://www.postgresql.org/)
-[![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg?logo=redis)](https://redis.io/)
-[![Celery](https://img.shields.io/badge/Celery-5.4+-37814A.svg?logo=celery)](https://docs.celeryq.dev/)
-[![Docker](https://img.shields.io/badge/Docker-Dev%20%7C%20Prod-2496ED.svg?logo=docker)](https://www.docker.com/)
-
-A clean, modular, and production-grade backend system for group expense management, multi-payer bill splitting, and debt settlements. Built strictly following clean layered architecture (`api` → `service` → `repo` → `database`) with dependency injection via factories.
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
+[![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791.svg)](https://www.postgresql.org/)
+[![Redis 7](https://img.shields.io/badge/Redis-7-DC382D.svg)](https://redis.io/)
 
 ---
 
-## 📑 Table of Contents
+## Contents
 
-- [Architectural Design](#-architectural-design)
-- [Key Features](#-key-features)
-- [Split & Settlement Algorithms](#-split--settlement-algorithms)
-- [Technology Stack](#-technology-stack)
-- [Project Structure](#-project-structure)
-- [Standardized Response Envelopes](#-standardized-response-envelopes)
-- [Running in Development vs Deploying in Production](#-running-in-development-vs-deploying-in-production)
-  - [Environment Matrix Comparison](#environment-matrix-comparison)
-  - [1. Development Mode (Local Hot-Reload)](#1-development-mode-local-hot-reload)
-    - [Method A: Docker Compose Development (Recommended)](#method-a-docker-compose-development-recommended)
-    - [Method B: Local Virtualenv Setup (with uv or pip)](#method-b-local-virtualenv-setup-with-uv-or-pip)
-  - [2. Production Deployment (GitHub Container Registry)](#2-production-deployment-github-container-registry)
-    - [Production Architecture & GHCR Images](#production-architecture--ghcr-images)
-    - [Running with Docker Compose in Production](#running-with-docker-compose-in-production)
-  - [3. Complete AWS EC2 Deployment Guide](#3-complete-aws-ec2-deployment-guide)
-    - [Step 1: Launch & Configure EC2 Instance](#step-1-launch--configure-ec2-instance)
-    - [Step 2: Server Provisioning & Docker Installation](#step-2-server-provisioning--docker-installation)
-    - [Step 3: Setup Project Directory & Environment](#step-3-setup-project-directory--environment)
-    - [Step 4: Authenticate with GitHub Container Registry](#step-4-authenticate-with-github-container-registry)
-    - [Step 5: Pull Containers & Launch Stack](#step-5-pull-containers--launch-stack)
-    - [Step 6: Free SSL / HTTPS Setup with Certbot](#step-6-free-ssl--https-setup-with-certbot)
-  - [4. Docker Registry Configuration (GHCR)](#4-docker-registry-configuration-ghcr)
-- [Continuous Integration & Delivery (CI/CD)](#-continuous-integration--delivery-cicd)
-  - [Automated Pipeline Workflow](#automated-pipeline-workflow)
-  - [Configuring GitHub Repository Secrets](#configuring-github-repository-secrets)
-- [API Endpoints Reference](#-api-endpoints-reference)
-- [Database Migrations (Alembic)](#-database-migrations-alembic)
-- [License](#-license)
+- [What it does](#what-it-does)
+- [How it is built](#how-it-is-built)
+- [Tech stack](#tech-stack)
+- [Project structure](#project-structure)
+- [Run it locally](#run-it-locally)
+- [Environment variables](#environment-variables)
+- [Deploy to AWS EC2](#deploy-to-aws-ec2)
+- [The CI/CD pipeline](#the-cicd-pipeline)
+- [Rules that keep deployments healthy](#rules-that-keep-deployments-healthy)
+- [Troubleshooting](#troubleshooting)
+- [API reference](#api-reference)
+- [Frontend](#frontend)
+- [Testing](#testing)
+- [Database migrations](#database-migrations)
+- [License](#license)
 
 ---
 
-## 🏛 Architectural Design
+## What it does
 
-The project enforces strict separation of concerns across all modules:
+**Accounts and security**
+- Registration with email verification through a 6-digit code (stored in Redis with an expiry, sent by a background Celery job).
+- Rate limiting on registration per IP, and a 10-minute account lock after 5 failed logins.
+- Forgot-password flow with a time-limited code.
+- JWT access tokens. The refresh token lives in an HttpOnly cookie, so JavaScript can never read it.
+
+**Groups**
+- The creator becomes the group admin.
+- Every group gets an 8-character invite code. Members can also be added directly by email.
+- Each group has its own currency.
+
+**Expenses**
+- Four ways to split: `EQUAL`, `EXACT`, `PERCENTAGE`, and `SHARES`. All of them are calculated to the cent, so the parts always add up to the total.
+- Any member can be the payer, and several people can pay for one expense.
+- Live balances show what each person has spent, owes, and their net position.
+
+**Settlements**
+- Record payments between members (cash, UPI, PayPal, Venmo, and so on).
+- Debt simplification uses a greedy minimum cash flow algorithm. If Charlie owes Bob 30 and Bob owes Alice 30, Charlie simply pays Alice 30. One payment instead of two.
+- An activity log records everything that happens in a group.
+
+---
+
+## How it is built
+
+The backend is split into layers, and each layer only talks to the one below it:
 
 ```
-[ HTTP Client / Frontend ]
-           │
-           ▼
-    ┌──────────────┐
-    │  API Layer   │  FastAPI Routers, Request Validation (Pydantic), Auth Guards, Response Envelopes
-    └──────┬───────┘
-           │ Injected via ServiceFactory
-           ▼
-    ┌──────────────┐
-    │Service Layer │  Domain Logic, Mathematical Splits, Anti-Spam (Redis), Celery Job Dispatching
-    └──────┬───────┘
-           │ Injected via RepoFactory
-           ▼
-    ┌──────────────┐
-    │  Repo Layer  │  Database Queries, Async SQL Execution (BaseRepository + Domain Repos)
-    └──────┬───────┘
-           │
-           ▼
-[ PostgreSQL / SQLAlchemy ORM (asyncpg) ]
+HTTP client / frontend
+        |
+   API layer        FastAPI routes, validation, auth, response format
+        |
+   Service layer    business rules, split math, spam protection, Celery jobs
+        |
+   Repository layer SQLAlchemy queries
+        |
+   PostgreSQL (asyncpg)
 ```
 
-1. **`api` Layer**: Handles route parameters, HTTP status codes, security/auth dependencies, and wraps all payloads into unified success/error envelopes.
-2. **`service` Layer**: Implements core business logic: split calculations down to the penny, debt simplification graphs, spam prevention, OTP verification, and dispatching async background jobs.
-3. **`repo` Layer**: Encapsulates all SQLAlchemy queries (`select`, `selectinload`, `flush`, `refresh`).
-4. **`factories`**: Provides centralized dependency injection (`RepoFactory`, `ServiceFactory`) for decoupled testing and clean extensibility.
+Services and repositories are created through two small factories (`ServiceFactory`, `RepoFactory`). This keeps the layers separate and makes them easy to test.
 
 ---
 
-## 🚀 Key Features
+## Tech stack
 
-### 1. Authentication & Security
-- **Registration**: Validates email format, first name, last name, and password confirmation (`password1` vs `password2`).
-- **Automatic Profile Provisioning**: Every user automatically receives an associated `UserProfile` in the database upon registration (currency preferences, avatar, phone, bio, payment handles).
-- **Redis Anti-Spam Protection**: Prevents registration spamming via sliding-window IP rate limiting (configurable limit per window).
-- **Email Verification**: Generates cryptographically secure 6-digit OTPs stored with TTL in Redis; dispatches emails asynchronously through Celery.
-- **Brute-Force & Lockout**: Tracks failed login attempts in Redis; automatically locks accounts for 10 minutes upon 5 consecutive failures.
-- **Password Reset**: Secure forgot-password flow via time-limited OTP verification.
-- **JWT Authentication**: High-security Bearer access tokens (HS256) and refresh tokens.
-
-### 2. Group Management
-- **Role-Based Membership**: Group creator is automatically assigned as the `ADMIN`.
-- **Unique Invite Codes**: Automatically generates human-readable 8-character invite codes (e.g. `H7K2M9XP`) for instant group joining.
-- **Direct Invitations**: Admins and members can add registered friends directly by email address.
-- **Multi-Currency Support**: Groups support configurable base currencies (USD, EUR, GBP, INR, etc.).
-
-### 3. Expense Splitting & Calculations
-- **Four Split Mechanisms**:
-  1. `EQUAL`: Divides expenses equally, mathematically adjusting remaining cents so sums match the exact total.
-  2. `EXACT`: Each member owes an explicit amount; validates that the sum matches the total down to $0.01.
-  3. `PERCENTAGE`: Custom percentages; enforces a strict 100.00% sum and auto-adjusts rounding pennies.
-  4. `SHARES`: Proportional weighting (e.g. 2 shares vs 1 share).
-- **Multi-Payer Support**: Allows any group member to pay on behalf of all or a subset of members.
-- **Real-Time Balances**: Computes total spending, total owed, and net balance for each member in the group.
-
-### 4. Settlements & Debt Simplification
-- **Direct Payments**: Record repayments between members with payment methods (Cash, UPI, PayPal, Venmo) and reference notes.
-- **Splitwise-Style Debt Simplification**: Built-in **Greedy Minimum Cash Flow Graph Algorithm** that minimizes the total number of transactions needed to settle all group debts.
-  - *Example*: If Charlie owes Bob $30 and Bob owes Alice $30, the algorithm simplifies it so Charlie pays Alice $30 directly (1 transaction instead of 2).
+| Area | Tools |
+|---|---|
+| Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic v2 |
+| Data | PostgreSQL 16, Redis 7 |
+| Background jobs | Celery (email sending) |
+| Frontend | Next.js (App Router), TypeScript, Tailwind CSS, TanStack Query, Zustand |
+| Infrastructure | Docker, Nginx, GitHub Actions, GitHub Container Registry (GHCR), AWS EC2 |
+| Tests | Pytest (backend), Vitest (frontend) |
 
 ---
 
-## 🗂 Project Structure
+## Project structure
 
 ```
 Splitter/
 ├── app/
-│   ├── core/                    # Core configuration, security & infrastructure
-│   │   ├── config.py            # Pydantic v2 settings (reads from .env)
-│   │   ├── database.py          # Async SQLAlchemy engine & session factory
-│   │   ├── redis.py             # aioredis connection manager
-│   │   ├── rate_limiter.py      # Redis rate limiting & OTP helpers
-│   │   ├── security.py          # Password hashing (bcrypt) & JWT handling
-│   │   ├── celery_app.py        # Celery broker & backend setup
-│   │   └── exceptions.py        # Base exceptions & custom exception handlers
-│   ├── modules/                 # Modular Feature Architecture
-│   │   ├── common/              # Shared models, base repository, schemas
-│   │   ├── auth/                # Authentication module (register, verify, login, OTP)
-│   │   ├── users/               # Users & Profiles module
-│   │   ├── groups/              # Groups & Memberships module (invite codes, roles)
-│   │   ├── expenses/            # Expenses & mathematical splits module
-│   │   ├── settlements/         # Settlements & greedy debt simplification module
-│   │   └── activities/          # Audit trail activity logging module
-│   ├── api/
-│   │   ├── dependencies.py      # FastAPI Depends injection (DB, Redis, Services)
-│   │   └── v1/
-│   │       └── api_router.py    # Master router aggregating all module endpoints
-│   ├── factories/
-│   │   ├── repo_factory.py      # Centralized Repository Factory
-│   │   └── service_factory.py   # Centralized Service Factory
-│   ├── models/
-│   │   └── __init__.py          # Central Alembic metadata discovery
-│   ├── workers/
-│   │   └── tasks.py             # Celery background workers (email dispatching)
-│   └── main.py                  # FastAPI application entrypoint & lifespan
+│   ├── core/              settings, database, redis, security, celery, exceptions
+│   ├── modules/           auth, users, groups, expenses, settlements, activities, common
+│   ├── api/               dependencies and the v1 router
+│   ├── factories/         repo_factory.py, service_factory.py
+│   ├── workers/           Celery tasks (email)
+│   └── main.py            application entry point
+├── frontend/              Next.js application
 ├── docker/
-│   ├── Dockerfile               # Multi-stage Dockerfile (development & production)
-│   ├── Dockerfile.celery        # Standalone Celery worker image
-│   ├── entrypoint.sh            # Production startup script (DB check + Alembic + multi-worker)
-│   ├── entrypoint.dev.sh        # Development startup script (DB check + Alembic + reload)
-│   └── nginx.conf               # Production Nginx reverse proxy configuration
-├── .github/
-│   └── workflows/
-│       └── ci.yml               # GitHub Actions CI/CD Pipeline
-├── tests/                       # Pytest test suite (unit, integration, split math)
-├── .dockerignore                # Excludes host venv, git, and local secrets
-├── .gitattributes               # Enforces LF line endings for scripts across OS
-├── .env.example                 # Example environment variables reference
-├── alembic.ini                  # Alembic database migration config
-├── docker-compose.dev.yml       # Development Compose (Hot reload, Mailpit, exposed ports)
-├── docker-compose.prod.yml      # Hardened Production Compose
-├── docker-compose.yml           # Production default Compose
-├── pyproject.toml               # Project specifications & dependencies
-└── requirements.txt             # Pinned requirements
+│   ├── Dockerfile         multi-stage image (development and production targets)
+│   ├── entrypoint.sh      production start: wait for DB, run migrations, start workers
+│   ├── entrypoint.dev.sh  development start with auto-reload
+│   └── nginx.conf         reverse proxy configuration
+├── alembic/               database migrations
+├── tests/                 backend tests
+├── .github/workflows/
+│   └── ci-cd.yml          test, build, push and deploy pipeline
+├── docker-compose.dev.yml     local development stack
+├── docker-compose.prod.yml    production stack
+├── .env.example               variables for local development
+└── .env.production.example    variables for the production server
 ```
+
+Keep exactly two compose files: `docker-compose.dev.yml` and `docker-compose.prod.yml`. Extra copies only cause confusion about which one is used.
 
 ---
 
-## 📦 Standardized Response Envelopes
+## Response format
 
-Every API endpoint returns a predictable and structured envelope:
+Every endpoint returns the same shape.
 
-### Success Response (`200 OK` / `201 Created`)
+Success:
+
 ```json
 {
   "success": true,
-  "message": "Group created successfully! Share the invite code with members to join.",
-  "data": {
-    "id": "c1f7b889-cf77-4b71-b0e2-d5cb0bca8085",
-    "name": "Trip to Japan",
-    "invite_code": "J7K9M2XP",
-    "currency": "USD",
-    "group_type": "TRIP",
-    "members_count": 1
-  },
+  "message": "Group created successfully.",
+  "data": { "id": "c1f7b889-...", "name": "Trip to Japan", "invite_code": "J7K9M2XP" },
   "meta": null
 }
 ```
 
-### Error Response (`400 Bad Request`, `401 Unauthorized`, `422 Validation Error`, `429 Rate Limit`)
+Error:
+
 ```json
 {
   "success": false,
-  "message": "Account temporarily locked due to repeated failed login attempts. Try again in 599 seconds.",
-  "error": {
-    "code": "RATE_LIMIT_EXCEEDED",
-    "message": "Account temporarily locked due to repeated failed login attempts. Try again in 599 seconds.",
-    "details": null
-  }
+  "message": "Account temporarily locked. Try again in 599 seconds.",
+  "error": { "code": "RATE_LIMIT_EXCEEDED", "message": "...", "details": null }
 }
 ```
 
 ---
 
-## 🔄 Running in Development vs Deploying in Production
+## Run it locally
 
-### Environment Matrix Comparison
+You need Docker and Docker Compose. For the non-Docker route you also need Python 3.12, `uv`, and Node 20.
 
-| Dimension | 🛠 Development (`docker-compose.dev.yml`) | 🚀 Production (`docker-compose.prod.yml`) |
-|---|---|---|
-| **FastAPI Server** | Single worker with `--reload` (live code updates) | 4+ Uvicorn workers (`UVICORN_WORKERS=4`) with proxy headers |
-| **Code Mounting** | Volume mounted (`.:/app`) for instant feedback | Baked immutably into Docker image |
-| **Linux Venv Protection** | Anonymous `/app/.venv` volume prevents host overwrite | Fully self-contained inside the image |
-| **PostgreSQL Port (5432)** | Exposed to host (`5432:5432`) for DBeaver / TablePlus | **Not exposed** (internal network only) |
-| **Redis Port (6379)** | Exposed to host (`6379:6379`) for RedisInsight / redis-cli | **Not exposed** (internal network only) |
-| **Email / OTP Testing** | **Mailpit** web UI enabled at `http://localhost:8025` | Production SMTP provider (SendGrid, Mailgun, AWS SES) |
-| **User Privileges** | Root in dev container for flexibility | Dedicated non-root user (`appuser`, UID 1000) |
-| **Database Migrations** | Auto-applied on container boot | Auto-applied on container boot via `entrypoint.sh` |
-| **Log Management** | Verbose `DEBUG` level streamed to stdout | `INFO` level with automatic `json-file` log rotation |
-| **Restart Policy** | `unless-stopped` | `always` |
-| **Reverse Proxy** | Direct access to port 8000 | Optional Nginx reverse proxy with rate limiting & SSL |
+### Option A: Docker (recommended)
 
----
-
-### 1. Development Mode
-
-#### Method A: Docker Compose Development (Recommended)
-
-Docker Compose provides a complete, isolated environment with FastAPI, PostgreSQL, Redis, Celery worker, and Mailpit email inspector running out of the box.
-
-1. **Clone the repository and copy the environment file**:
-   ```bash
-   git clone <repo-url>
-   cd Splitter
-   cp .env.example .env
-   ```
-
-2. **Start the development stack**:
-   ```bash
-   # Build and launch all development services
-   docker compose -f docker-compose.dev.yml up --build
-   ```
-   *(Or run in detached background mode)*:
-   ```bash
-   docker compose -f docker-compose.dev.yml up -d
-   ```
-
-3. **What happens automatically**:
-   - PostgreSQL and Redis containers boot and pass their health checks.
-   - The API container runs `entrypoint.dev.sh`, which waits for PostgreSQL, applies all Alembic migrations (`alembic upgrade head`), and starts Uvicorn with hot-reload enabled.
-   - Any edits you make to Python files in `app/` are reflected immediately without rebuilding the container.
-   - The container's internal Linux virtual environment (`/app/.venv`) is preserved and never overwritten by your host machine's virtual environment.
-
-4. **Accessing Development Services**:
-   - **Interactive Swagger API Documentation**: [http://localhost:8001/docs](http://localhost:8001/docs) *(or port `8000` depending on `API_PORT`)*
-   - **ReDoc Documentation**: [http://localhost:8001/redoc](http://localhost:8001/redoc)
-   - **Health Check**: [http://localhost:8001/health](http://localhost:8001/health)
-   - **Mailpit Web UI (Email & OTP Catcher)**: [http://localhost:8025](http://localhost:8025)
-     *(Open this in your browser to view all registration OTPs and password reset emails sent by Celery!)*
-   - **PostgreSQL Database**: `localhost:5433` *(Mapped to host port 5433 to avoid conflict with local postgres on 5432; User: `postgres`, Password: `postgres`, DB: `splitter_db`)*
-   - **Redis**: `localhost:6379`
-
-5. **Viewing Logs & Running Commands in Dev**:
-   ```bash
-   # Follow live API logs
-   docker compose -f docker-compose.dev.yml logs -f api
-
-   # Follow Celery worker logs
-   docker compose -f docker-compose.dev.yml logs -f celery_worker
-
-   # Run test suite inside the container
-   docker compose -f docker-compose.dev.yml exec api uv run pytest -v
-
-   # Generate a new database migration inside the container
-   docker compose -f docker-compose.dev.yml exec api uv run alembic revision --autogenerate -m "Add new column"
-
-   # Stop all development containers
-   docker compose -f docker-compose.dev.yml down
-   ```
-
----
-
-#### Method B: Local Virtualenv Setup (with `uv` or `pip`)
-
-If you prefer running the Python process directly on your host machine:
-
-1. **Install dependencies**:
-   ```bash
-   # Using uv (fastest)
-   uv sync --dev
-
-   # Or using standard pip
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-
-2. **Start backing services (PostgreSQL & Redis)**:
-   ```bash
-   # You can spin up just Postgres and Redis using Docker:
-   docker compose -f docker-compose.dev.yml up -d postgres redis mailpit
-   ```
-
-3. **Run database migrations**:
-   ```bash
-   uv run alembic upgrade head
-   ```
-
-4. **Start the FastAPI server**:
-   ```bash
-   uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-   ```
-
-5. **Start the Celery worker (in a second terminal)**:
-   ```bash
-   uv run celery -A app.core.celery_app worker --loglevel=info
-   ```
-
----
-
-### 2. Production Deployment (GitHub Container Registry)
-
-#### Production Architecture & GHCR Images
-
-In production, the application **does not compile or build images on the production host**. Doing so can starve small or medium cloud instances (like AWS `t2.micro` or `t3.small`) of RAM and CPU during intensive frontend compilation (`npm run build`).
-
-Instead, the CI/CD pipeline builds hardened, multi-stage production images and publishes them to **GitHub Container Registry (GHCR)**:
-- **Backend API & Celery Worker**: `ghcr.io/ram2005024/splitter-api:latest`
-- **Next.js Frontend**: `ghcr.io/ram2005024/splitter-frontend:latest`
-
-The production compose configuration (`docker-compose.prod.yml` and `docker-compose.yml`) pulls these pre-built images directly from GHCR.
-
-#### Running with Docker Compose in Production
-
-To launch the entire production stack:
 ```bash
-# 1. Pull the latest pre-compiled images from GHCR
-docker compose -f docker-compose.prod.yml pull
-
-# 2. Launch all services in detached mode
-docker compose -f docker-compose.prod.yml up -d
-
-# 3. Verify running containers and health checks
-docker compose -f docker-compose.prod.yml ps
+git clone https://github.com/ram2005024/Splitter.git
+cd Splitter
+cp .env.example .env
+docker compose -f docker-compose.dev.yml up --build
 ```
-*(Alternatively, simply run `docker compose pull && docker compose up -d`, as `docker-compose.yml` defaults to the production GHCR configuration).*
 
----
+This starts PostgreSQL, Redis, Mailpit (a fake inbox), the API, the Celery worker and the frontend. The API container waits for the database, applies all migrations, and starts with auto-reload, so edits to files in `app/` show up straight away.
 
-### 3. Complete AWS EC2 Deployment Guide
+| Service | Address |
+|---|---|
+| Frontend | http://localhost:3000 |
+| API docs (Swagger) | http://localhost:8001/docs |
+| Health check | http://localhost:8001/health |
+| Mailpit (see verification codes here) | http://localhost:8025 |
+| PostgreSQL | localhost:5433 (user `postgres`, password `postgres`, database `splitter_db`) |
+| Redis | localhost:6379 |
 
-Follow these exact steps to deploy Splitter onto a fresh **Amazon Web Services (AWS) EC2** instance from scratch.
+The API port depends on `API_PORT` in your `.env`. Registration and password-reset codes are emails, so open Mailpit to read them.
 
-#### Step 1: Launch & Configure EC2 Instance
+Useful commands:
 
-1. Log into your **AWS Management Console** and navigate to **EC2** &rarr; **Launch Instance**.
-2. **Name**: `splitter-production-server`
-3. **Application and OS Images (AMI)**: **Ubuntu Server 24.04 LTS (HVM), SSD Volume Type**.
-4. **Instance Type**:
-   - Recommended: **`t3.small`** (2 vCPU, 2 GB RAM) for smooth production workloads.
-   - Budget option: **`t2.micro`** (1 vCPU, 1 GB RAM) — *Note: if using t2.micro, you MUST configure Swap Memory in Step 2*.
-5. **Key Pair (login)**: Select or create an RSA key pair (`splitter-key.pem`) and save it securely on your local computer.
-6. **Network Settings (Security Group)**:
-   Create a Security Group with the following **Inbound Rules**:
-   | Type | Port Range | Source | Purpose |
-   |---|---|---|---|
-   | **SSH** | `22` | `My IP` (or `0.0.0.0/0`) | Secure terminal access |
-   | **HTTP** | `80` | `0.0.0.0/0` (Anywhere) | Public web traffic & Let's Encrypt validation |
-   | **HTTPS** | `443` | `0.0.0.0/0` (Anywhere) | Encrypted SSL web traffic |
-7. **Storage (Volume)**: Configure at least **25 GiB** of `gp3` storage.
-8. Click **Launch Instance**.
-
----
-
-#### Step 2: Server Provisioning & Docker Installation
-
-Connect to your EC2 instance via SSH:
 ```bash
-# On your local machine (adjust path to your key and EC2 public IP):
+docker compose -f docker-compose.dev.yml logs -f api
+docker compose -f docker-compose.dev.yml logs -f celery_worker
+docker compose -f docker-compose.dev.yml exec api uv run pytest -v
+docker compose -f docker-compose.dev.yml exec api uv run alembic revision --autogenerate -m "describe change"
+docker compose -f docker-compose.dev.yml down
+```
+
+### Option B: run the processes yourself
+
+```bash
+# 1. Install dependencies
+uv sync --dev
+
+# 2. Start only the supporting services
+docker compose -f docker-compose.dev.yml up -d postgres redis mailpit
+
+# 3. Apply migrations
+uv run alembic upgrade head
+
+# 4. Start the API (terminal 1)
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+# 5. Start the worker (terminal 2)
+uv run celery -A app.core.celery_app worker --loglevel=info
+
+# 6. Start the frontend (terminal 3)
+cd frontend && npm install && npm run dev
+```
+
+---
+
+## Environment variables
+
+There are two env files with two different jobs:
+
+- `.env.example` is for local development. Copy it to `.env`.
+- `.env.production.example` is a template for the server. It only contains placeholders and is safe to commit.
+
+The real production `.env` exists only on the server. Never commit it.
+
+Minimum production values:
+
+```env
+# Application
+PROJECT_NAME="Splitter"
+ENVIRONMENT=production
+DEBUG=False
+API_V1_STR=/api/v1
+HTTP_PORT=80
+HTTPS_PORT=443
+NEXT_PUBLIC_API_URL=/api/v1
+ALLOWED_ORIGINS=http://YOUR_SERVER_IP,https://yourdomain.com
+
+# Security (generate with: openssl rand -hex 32)
+SECRET_KEY=replace_with_a_long_random_value
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+REFRESH_TOKEN_EXPIRE_DAYS=7
+VERIFICATION_CODE_EXPIRE_MINUTES=15
+PASSWORD_RESET_CODE_EXPIRE_MINUTES=15
+
+# PostgreSQL: the single source of truth for database credentials
+POSTGRES_USER=splitter_user
+POSTGRES_PASSWORD=replace_with_hex_password
+POSTGRES_DB=splitter_db
+
+# Workers (keep at 2 on small instances)
+UVICORN_WORKERS=2
+CELERY_CONCURRENCY=2
+
+# Rate limits
+RATE_LIMIT_REGISTER_PER_IP=5
+RATE_LIMIT_REGISTER_WINDOW_SECONDS=900
+RATE_LIMIT_LOGIN_MAX_FAILED_ATTEMPTS=5
+
+# Email
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_TLS=True
+SMTP_SSL=False
+SMTP_USER=you@example.com
+SMTP_PASSWORD=your_app_password
+EMAILS_FROM_EMAIL=you@example.com
+EMAILS_FROM_NAME="Splitter"
+```
+
+Things to know:
+
+- **Do not set `DATABASE_URL`, `REDIS_URL`, or the Celery URLs in the production `.env`.** `docker-compose.prod.yml` builds them from the `POSTGRES_*` values, so the app and the database can never disagree.
+- **Use a plain password** made of letters and numbers (`openssl rand -hex 24` works well). Characters such as `@ / : # $` break the database URL. If you must use `$`, wrap the value in single quotes.
+- **Each variable must appear once.** A duplicated key is a common source of confusion.
+
+---
+
+## Deploy to AWS EC2
+
+This is the full path from nothing to a running server. The pipeline then updates it on every push.
+
+### Step 1: Launch the instance
+
+1. In the AWS console, go to EC2 and choose Launch Instance.
+2. Pick Ubuntu Server 24.04 LTS.
+3. Instance type: `t3.small` (2 GB RAM) is comfortable. `t2.micro` (1 GB) works only with the swap file in step 2.
+4. Create a key pair and keep the `.pem` file safe.
+5. Security group, inbound rules:
+
+   | Type | Port | Source |
+   |---|---|---|
+   | SSH | 22 | your IP |
+   | HTTP | 80 | anywhere |
+   | HTTPS | 443 | anywhere |
+
+6. Storage: at least 25 GiB (gp3).
+
+### Step 2: Prepare the server
+
+```bash
 chmod 400 splitter-key.pem
-ssh -i splitter-key.pem ubuntu@<YOUR_EC2_PUBLIC_IP>
+ssh -i splitter-key.pem ubuntu@YOUR_EC2_PUBLIC_IP
 ```
 
-Once connected to your Ubuntu EC2 terminal, install Docker Engine and the Docker Compose plugin:
+Then on the server:
 
 ```bash
-# 1. Update system packages
 sudo apt update && sudo apt upgrade -y
+sudo apt install -y ca-certificates curl gnupg lsb-release git ufw openssl
 
-# 2. Install essential utilities
-sudo apt install -y ca-certificates curl gnupg lsb-release git ufw
-
-# 3. Add Docker's official GPG key and repository
+# Docker's official repository
 sudo install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# 4. Install Docker Engine, CLI, and Compose plugin
 sudo apt update
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-# 5. Enable non-root Docker usage for the ubuntu user
+# Let the ubuntu user run docker without sudo
 sudo usermod -aG docker ubuntu
 newgrp docker
 
-# 6. (CRUCIAL for t2.micro/t3.micro instances) Configure 2GB Swap Memory to prevent OOM kills
+# Swap file (strongly recommended on 1 GB instances)
 sudo fallocate -l 2G /swapfile
 sudo chmod 600 /swapfile
 sudo mkswap /swapfile
@@ -418,419 +323,380 @@ sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
----
+### Step 3: Clone the project into the right place
 
-#### Step 3: Setup Project Directory & Environment
-
-1. Create the project directory:
-   ```bash
-   sudo mkdir -p /opt/splitter
-   sudo chown -R ubuntu:ubuntu /opt/splitter
-   cd /opt/splitter
-   ```
-
-2. Clone the repository into `/opt/splitter`:
-   ```bash
-   git clone https://github.com/<your-username>/Splitter.git .
-   ```
-
-3. Create your production environment file from the template:
-   ```bash
-   cp .env.production.example .env
-   ```
-
-4. Edit `.env` with your production values:
-   ```bash
-   nano .env
-   ```
-   **Key values to configure**:
-   - `SECRET_KEY`: Generate a random 64-character hex string:
-     ```bash
-     openssl rand -hex 32
-     ```
-   - `POSTGRES_PASSWORD`: Set a strong database password.
-   - `GHCR_IMAGE_API`: `ghcr.io/ram2005024/splitter-api:latest`
-   - `GHCR_IMAGE_FRONTEND`: `ghcr.io/ram2005024/splitter-frontend:latest`
-   - `ALLOWED_ORIGINS`: `http://<YOUR_EC2_PUBLIC_IP>,https://yourdomain.com`
-   - `SMTP_...`: Your production SMTP credentials (Gmail App Password, Resend API key, or SendGrid) to send real transactional emails.
-
----
-
-#### Step 4: Authenticate with GitHub Container Registry
-
-If your GitHub repository or packages are private, authenticate your EC2 Docker daemon with GHCR:
-
-1. On GitHub, create a **Personal Access Token (Classic)**:
-   - Go to: **GitHub &rarr; Settings &rarr; Developer Settings &rarr; Personal access tokens &rarr; Tokens (classic)**.
-   - Click **Generate new token (classic)**.
-   - Note: `EC2-GHCR-Pull-Token`.
-   - Select scopes: `read:packages` (and `repo` if pulling private repository files).
-   - Click **Generate token** and copy the token (`ghp_xxxxxxxxxxxx`).
-
-2. On your EC2 terminal, log into GHCR:
-   ```bash
-   echo "ghp_YOUR_TOKEN_HERE" | docker login ghcr.io -u ram2005024 --password-stdin
-   ```
-   *(You should see: `Login Succeeded`)*.
-
----
-
-#### Step 5: Pull Containers & Launch Stack
-
-1. **Pull all pre-built images**:
-   ```bash
-   docker compose -f docker-compose.prod.yml pull
-   ```
-
-2. **Start the production stack**:
-   ```bash
-   docker compose -f docker-compose.prod.yml up -d
-   ```
-
-3. **Verify container health**:
-   ```bash
-   docker compose -f docker-compose.prod.yml ps
-   ```
-   All containers (`splitter_api_prod`, `splitter_frontend_prod`, `splitter_nginx_prod`, `splitter_postgres_prod`, `splitter_redis_prod`, `splitter_celery_worker_prod`) should show status `Up (healthy)`.
-
-4. **Verify database migrations**:
-   Alembic runs automatically on API startup. To verify manually:
-   ```bash
-   docker compose -f docker-compose.prod.yml exec api alembic current
-   ```
-
-5. **Clean unused images & check disk space**:
-   Whenever new `:latest` images are pulled, previous images become unused. Free up disk space with:
-   ```bash
-   docker image prune -af
-   docker system df
-   ```
-
-6. **Test public access**:
-   Open your browser and visit: `http://<YOUR_EC2_PUBLIC_IP>`. You will see the Splitter application fully running!
-
----
-
-#### Step 6: Free SSL / HTTPS Setup with Certbot
-
-To secure your production instance with HTTPS using a custom domain (e.g. `splitter.yourdomain.com`):
-
-1. In your domain DNS manager (e.g. Cloudflare, Route 53, Namecheap), point an **A record** to your EC2 Public IP address.
-2. Install Certbot on your EC2 host:
-   ```bash
-   sudo apt install -y certbot python3-certbot-nginx
-   ```
-3. Temporarily stop the Docker Nginx container to free port 80 for standalone certificate generation:
-   ```bash
-   docker compose -f docker-compose.prod.yml stop nginx
-   sudo certbot certonly --standalone -d splitter.yourdomain.com
-   ```
-4. Mount the generated certificates into `docker/nginx.conf` or terminate SSL at an AWS Application Load Balancer (ALB).
-
----
-
-### 4. Docker Registry Configuration (GHCR)
-
-The project uses **GitHub Container Registry (ghcr.io)** to host OCI container images.
-
-#### Package Naming Convention
-Image tags published by the pipeline follow this naming format:
-- `ghcr.io/ram2005024/splitter-api:latest` & `ghcr.io/ram2005024/splitter-api:<git-commit-sha>`
-- `ghcr.io/ram2005024/splitter-frontend:latest` & `ghcr.io/ram2005024/splitter-frontend:<git-commit-sha>`
-
-#### Making Packages Public (Optional)
-By default, newly published GHCR packages inherit private permissions. To allow pulling without entering credentials:
-1. Navigate to your GitHub profile &rarr; **Packages**.
-2. Click on `splitter-api` &rarr; **Package Settings** &rarr; scroll to **Danger Zone** &rarr; **Change visibility** &rarr; select **Public**.
-3. Repeat for `splitter-frontend`.
-
----
-
-## 🤖 Continuous Integration & Delivery (CI/CD)
-
-The repository includes a production-grade GitHub Actions pipeline located at [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
-
-### Automated Pipeline Workflow
-
-Whenever code is pushed to the `main` (or `master`) branch:
-
-```
-┌─────────────────────────────────┐
-│     Job 1: Backend Tests        │  Runs Pytest, syntax compile, & Alembic migrations
-└────────────────┬────────────────┘  against isolated PostgreSQL 16 & Redis 7 services
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│     Job 2: Frontend Tests       │  Validates TypeScript type consistency (tsc --noEmit)
-└────────────────┬────────────────┘  and builds the Next.js production bundle
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│  Job 3: Build & Push to GHCR    │  Builds hardened multi-stage Docker images with Buildx
-└────────────────┬────────────────┘  and pushes to ghcr.io/ram2005024/splitter-(api|frontend)
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│     Job 4: Automated EC2 Deploy │  Connects to AWS EC2 via SSH, pulls new containers,
-└─────────────────────────────────┘  executes zero-downtime swap, runs Alembic migrations
-```
-
-1. **Backend Tests**: Spawns ephemeral PostgreSQL 16 & Redis 7 service containers, tests migration schema integrity, and runs all unit & integration tests.
-2. **Frontend Tests**: Installs dependencies, runs strict TypeScript typechecks, and tests `next build`.
-3. **Build & Push**: Compiles the backend and frontend into lean Alpine/Debian-slim production images and pushes them to GHCR.
-4. **Deploy to EC2**: Authenticates securely via SSH, pulls updated container tags, triggers zero-downtime container replacement (`docker compose up -d`), runs database migrations, and prunes old images.
-
-### Configuring GitHub Repository Secrets
-
-To enable automated zero-downtime deployments to your EC2 instance upon every `git push origin main`, configure the following secrets in your GitHub repository:
-
-1. Navigate to: **GitHub Repository &rarr; Settings &rarr; Secrets and variables &rarr; Actions &rarr; New repository secret**.
-2. Add the following secrets:
-
-| Secret Name | Value Example | Description |
-|---|---|---|
-| `EC2_HOST` | `54.210.88.120` | Public IPv4 address or domain of your EC2 instance |
-| `EC2_USERNAME` | `ubuntu` | SSH login user (default is `ubuntu` on Ubuntu AMIs) |
-| `EC2_SSH_KEY` | `-----BEGIN RSA PRIVATE KEY-----...` | Entire contents of your private key (`splitter-key.pem`) |
-| `EC2_PORT` | `22` | SSH port (defaults to `22` if omitted) |
-
-> **Note**: If `EC2_HOST` or `EC2_SSH_KEY` are not set, the workflow will test the code, build and push the Docker images to GHCR, and safely skip the EC2 deployment step with a helpful notification.
-
----
-
-## 🔌 API Endpoints Reference
-
-### 1. Authentication (`/api/v1/auth`)
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/register` | Register new account (IP spam protected, auto profile creation, sends OTP) |
-| `POST` | `/verify` | Verify email with 6-digit OTP code |
-| `POST` | `/resend-verification` | Resend account verification OTP |
-| `POST` | `/login` | Authenticate with email & password (Redis lockout protection) |
-| `POST` | `/refresh` | Refresh JWT access token |
-| `POST` | `/forgot-password` | Request password reset code |
-| `POST` | `/reset-password` | Reset password using verified reset OTP |
-
-### 2. Users & Profiles (`/api/v1/users`)
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/me` | Get current logged-in user details and profile |
-| `PATCH` | `/me/profile` | Update profile (phone, bio, currency, payment handle) |
-
-### 3. Groups & Members (`/api/v1/groups`)
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/` | Create an expense group (Creator becomes `ADMIN`, generates invite code) |
-| `GET` | `/` | List all groups the user belongs to |
-| `GET` | `/{group_id}` | Get group details with member list |
-| `POST` | `/join` | Join group using 8-character unique invite code |
-| `POST` | `/{group_id}/members` | Add member directly by email address |
-| `GET` | `/{group_id}/members` | List group members and roles |
-
-### 4. Expenses & Splits (`/api/v1/groups`)
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/{group_id}/expenses` | Record expense (`EQUAL`, `EXACT`, `PERCENTAGE`, `SHARES`) |
-| `GET` | `/{group_id}/expenses` | List group expenses with split breakdowns |
-| `GET` | `/{group_id}/expenses/{expense_id}` | Get single expense details by ID |
-| `DELETE` | `/{group_id}/expenses/{expense_id}` | Delete an expense (payer or group admin) |
-| `GET` | `/{group_id}/balances` | Get net balances for all members |
-
-### 5. Settlements & Debt Simplification (`/api/v1/groups`)
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/{group_id}/settlements` | Record a direct repayment between members |
-| `GET` | `/{group_id}/settlements` | View settlement payment history |
-| `GET` | `/{group_id}/simplify-debts` | Execute Greedy Min-Cash-Flow graph simplification |
-
-### 6. Activity Logs (`/api/v1/groups`)
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/{group_id}/activities` | View timeline audit trail of group events |
-
----
-
-## 🎨 Next.js + TypeScript Full-Stack Frontend
-
-The application features a modern, responsive frontend built with **Next.js (App Router)**, **TypeScript**, **Tailwind CSS**, **TanStack Query**, and **Zustand**.
-
-### 1. Authentication Architecture & Security Contract
-
-The frontend and backend implement an enterprise-grade authentication protocol:
-
-```text
-LOGIN FLOW:
-Browser (Credentials) ──► POST /api/v1/auth/login ──► FastAPI validates password
-                                                             │
-                              ┌──────────────────────────────┴──────────────────────────────┐
-                              ▼                                                             ▼
-                    Generate Access Token (JWT)                                   Generate Refresh Token (JWT with JTI)
-                              │                                                             │
-                              ▼                                                             ▼
-                   Return in JSON Body: { access_token, user }                   Set HttpOnly, SameSite=Lax Cookie
-                              │                                                             │
-                              ▼                                                             ▼
-                    Stored in Zustand Auth Store                                Managed entirely by Browser Cookie Jar
-```
-
-- **No Refresh Tokens in JavaScript**: Refresh tokens are **never** stored in `localStorage`, `sessionStorage`, or Zustand. The client JavaScript cannot read the token, protecting users from XSS attacks.
-- **Concurrent 401 Refresh Deduplication**: If multiple protected API calls (e.g. 4 concurrent requests) return `401 Unauthorized` simultaneously, an in-memory shared promise queue (`refresh.ts`) ensures that **strictly ONE** refresh request is sent to `/api/v1/auth/refresh`. All pending requests await this single promise and retry with the new access token.
-- **Refresh Token Rotation & Revocation**: When `/api/v1/auth/refresh` is called, the old token's `jti` is blacklisted in Redis and a fresh token is issued. Calling `/api/v1/auth/logout` explicitly blacklists the active `jti` in Redis and clears the HttpOnly cookie.
-
-### 2. Frontend Project Structure
-
-```text
-frontend/
-├── src/
-│   ├── app/
-│   │   ├── (auth)/
-│   │   │   ├── login/page.tsx               # Credentials login & session expiry handling
-│   │   │   ├── register/page.tsx            # User registration form
-│   │   │   ├── verify-email/page.tsx        # 6-digit email OTP verification
-│   │   │   ├── forgot-password/page.tsx     # Password reset code dispatch
-│   │   │   └── reset-password/page.tsx      # OTP verification & password update
-│   │   ├── (dashboard)/
-│   │   │   ├── layout.tsx                   # Protected route wrapper with workspace header
-│   │   │   ├── dashboard/page.tsx           # Net balance overview & active groups
-│   │   │   ├── groups/
-│   │   │   │   ├── page.tsx                 # Searchable groups list & invite code copy
-│   │   │   │   ├── new/page.tsx             # Dedicated group creation form
-│   │   │   │   └── [groupId]/
-│   │   │   │       ├── page.tsx             # Group tabs: Expenses, Balances, Debts, Members
-│   │   │   │       └── expenses/
-│   │   │   │           ├── new/page.tsx     # Expense creator (EQUAL, EXACT, PERCENTAGE, SHARES)
-│   │   │   │           └── [expenseId]/page.tsx # Expense details & deletion
-│   │   │   ├── balances/page.tsx            # Global financial standings & settlements
-│   │   │   └── profile/page.tsx             # User profile, currency, & payment handle
-│   │   ├── layout.tsx                       # Root layout with QueryClient & Auth providers
-│   │   └── page.tsx                         # Landing marketing page with debt simplification hero
-│   ├── components/
-│   │   ├── ui/                              # Accessible UI primitives (Button, Card, Input, Dialog, etc.)
-│   │   ├── layout/                          # AppHeader, Navbar, Navigation links
-│   │   ├── auth/                            # ProtectedRoute guard wrapper
-│   │   ├── groups/                          # CreateGroupDialog, JoinGroupDialog, AddMemberDialog
-│   │   └── settlements/                     # RecordSettlementDialog
-│   ├── features/
-│   │   ├── auth/                            # Auth API, hooks, Zod validation schemas
-│   │   ├── groups/                          # Groups API, hooks, Zod schemas
-│   │   ├── expenses/                        # Expenses API, hooks, Zod schemas
-│   │   ├── settlements/                     # Settlements API, hooks, Zod schemas
-│   │   └── users/                           # Profile update API & hooks
-│   ├── lib/
-│   │   ├── api/
-│   │   │   ├── client.ts                    # Centralized Axios client with Bearer injection & 401 retry
-│   │   │   ├── refresh.ts                   # Concurrent refresh promise coordinator
-│   │   │   └── errors.ts                    # FastAPI error normalizer
-│   │   └── utils.ts                         # Formatting for currency, initials, and dates
-│   ├── providers/                           # QueryProvider (TanStack) & AuthProvider
-│   ├── stores/                              # Zustand useAuthStore
-│   └── types/                               # TypeScript API contract definitions
-├── Dockerfile.dev                           # Development container with hot-reloading
-├── Dockerfile                               # Multi-stage production container with standalone output
-└── vitest.config.ts                         # Frontend unit test configuration
-```
-
----
-
-## 🚀 Running the Full-Stack Application
-
-### 1. Development Mode
-
-#### Option A: Docker Compose (Entire Stack)
-
-Runs PostgreSQL, Redis, Mailpit, FastAPI API, Celery Worker, and Next.js Frontend with hot reload:
+The pipeline always works in `/opt/splitter/Splitter`. Clone so that this exact folder is created:
 
 ```bash
-# Start all containers in development mode
-docker compose -f docker-compose.dev.yml up --build
-
-# Services Available:
-# - Frontend Application:    http://localhost:3000
-# - Backend FastAPI API:     http://localhost:8001
-# - Interactive API Docs:    http://localhost:8001/docs
-# - Mailpit Email Inspector: http://localhost:8025
+sudo mkdir -p /opt/splitter
+sudo chown ubuntu:ubuntu /opt/splitter
+cd /opt/splitter
+git clone https://github.com/ram2005024/Splitter.git
+cd Splitter
+pwd        # must print /opt/splitter/Splitter
 ```
 
-#### Option B: Local Processes (Fast Development)
+Do not add a `.` to the end of the clone command, and do not clone a second copy anywhere else. If you want a different location, change the `APP_DIR` line in the deploy job of `.github/workflows/ci-cd.yml`.
 
-**Terminal 1 — Backend API:**
+### Step 4: Create the real `.env`
+
 ```bash
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+cd /opt/splitter/Splitter
+cp .env.production.example .env
+nano .env
 ```
 
-**Terminal 2 — Frontend Next.js App:**
+Fill in real values (see [Environment variables](#environment-variables)). Generate the secrets like this:
+
 ```bash
-cd frontend
-npm run dev
-# App starts at http://localhost:3000
+openssl rand -hex 32     # for SECRET_KEY
+openssl rand -hex 24     # for POSTGRES_PASSWORD
+```
+
+Check that git is not tracking it:
+
+```bash
+git ls-files .env        # should print nothing
+```
+
+### Step 5: Give the server permission to pull images
+
+Images are stored in GitHub Container Registry. In GitHub, create a personal access token (classic) with the `read:packages` scope, and add it as a repository secret named `GHCR_TOKEN` (see [secrets](#repository-secrets)). The pipeline logs in with it during every deploy.
+
+If you want to run the first start by hand instead of waiting for the pipeline:
+
+```bash
+echo "YOUR_TOKEN" | docker login ghcr.io -u ram2005024 --password-stdin
+docker compose --env-file .env -f docker-compose.prod.yml pull
+docker compose --env-file .env -f docker-compose.prod.yml up -d
+docker compose --env-file .env -f docker-compose.prod.yml ps
+```
+
+### Step 6: Let the pipeline take over
+
+Add the repository secrets, then push to `main`. From now on every push tests, builds, and deploys automatically.
+
+### Step 7: HTTPS
+
+The stack ships with a self-signed certificate, so HTTPS works immediately but the browser shows a warning. The pipeline creates this certificate only when the files `nginx-selfsigned.crt` and `nginx-selfsigned.key` do not exist. It never overwrites existing files.
+
+For a real certificate, point a domain's A record at your server, then:
+
+```bash
+cd /opt/splitter/Splitter
+sudo apt install -y certbot
+docker compose --env-file .env -f docker-compose.prod.yml stop nginx
+sudo certbot certonly --standalone -d splitter.yourdomain.com
+sudo cp /etc/letsencrypt/live/splitter.yourdomain.com/fullchain.pem nginx-selfsigned.crt
+sudo cp /etc/letsencrypt/live/splitter.yourdomain.com/privkey.pem  nginx-selfsigned.key
+sudo chown ubuntu:ubuntu nginx-selfsigned.crt nginx-selfsigned.key
+docker compose --env-file .env -f docker-compose.prod.yml up -d nginx
+```
+
+Let's Encrypt certificates last 90 days, so repeat the copy step after each renewal. The alternative is an AWS load balancer that handles the certificate for you.
+
+---
+
+## The CI/CD pipeline
+
+The workflow lives in `.github/workflows/ci-cd.yml` and runs on every push to `main` or `master`. Pull requests run only the tests.
+
+```
+Backend tests ----+
+                  +--> Build and push images --> Deploy to EC2
+Frontend tests ---+
+```
+
+**1. Backend tests.** Spins up PostgreSQL and Redis, checks that the app imports, applies all Alembic migrations on an empty database, then runs Pytest.
+
+**2. Frontend tests.** Installs dependencies, runs the TypeScript check, and builds Next.js.
+
+**3. Build and push.** Builds the API and frontend images and pushes each with two tags: `latest` and the commit SHA, for example `ghcr.io/ram2005024/splitter-api:<sha>`.
+
+**4. Deploy.** Connects over SSH and does this on the server:
+
+1. Works in `/opt/splitter/Splitter` and updates the code.
+2. Checks that `.env` exists, that the Postgres values and `SECRET_KEY` are set, and that no placeholders remain. It never edits `.env`.
+3. Creates the self-signed certificate if the files are missing.
+4. Removes images that no container uses, so the disk does not fill up.
+5. Logs in to GHCR and pulls the exact images built from this commit. The tags are stored in a small file called `.images.env`.
+6. Starts PostgreSQL and Redis, then checks that the credentials in `.env` really work. If the data volume holds an older password, it finds an existing role and updates the password to match `.env`.
+7. Starts the full stack and waits for the API health check.
+8. Runs `alembic upgrade head`.
+9. Prunes stopped containers, unused images and build cache. It does not touch volumes, so the database is safe.
+
+If the stack fails to start, the API never becomes healthy, or the migration fails, the pipeline restores the previous image tags and brings the old version back up. A failed migration can leave the database partly migrated, and the rollback does not undo that.
+
+Replacing containers causes a short interruption while the new API starts. This is a simple deploy, not a zero-downtime one.
+
+### Repository secrets
+
+In GitHub go to Settings, Secrets and variables, Actions, and add:
+
+| Secret | Value |
+|---|---|
+| `EC2_HOST` | Public IP or domain of the server |
+| `EC2_USERNAME` | `ubuntu` (the default if omitted) |
+| `EC2_SSH_KEY` | The full contents of your `.pem` private key |
+| `EC2_PORT` | `22` (the default if omitted) |
+| `GHCR_TOKEN` | Personal access token with `read:packages` |
+
+If `EC2_HOST` or `EC2_SSH_KEY` is missing, the pipeline still tests and publishes the images and skips the deploy with a warning.
+
+---
+
+## Rules that keep deployments healthy
+
+Most past deployment trouble came from breaking one of these.
+
+1. **One project folder, one `.env`.** On the server there is exactly one: `/opt/splitter/Splitter`. Run `pwd` before you edit anything. A second copy of the repo with a second `.env` means the pipeline and you are looking at different settings.
+2. **The server `.env` is yours.** Only edit it by hand on the server. The pipeline reads it and never changes it.
+3. **Database credentials are applied only once.** PostgreSQL reads `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` when the data volume is first created. Changing them in `.env` later does not change an existing database. After changing the password, follow the reset steps in [Troubleshooting](#troubleshooting).
+4. **Never delete the database volume by accident.** These commands destroy your data: `docker compose down -v`, `docker volume rm splitter-prod_postgres_prod_data`, and `docker system prune --volumes`. The pipeline never uses them.
+5. **Never commit secrets.** `.env` must stay out of git. If a secret is ever pasted in a chat, a screenshot, or a commit, replace it.
+6. **Use simple passwords.** Letters and numbers only for the database password.
+7. **Do not set `DATABASE_URL` in the production `.env`.** Compose builds it from `POSTGRES_*`.
+8. **Do not run commands with the shell prompt included.** Copy only the command, not `ubuntu@host:~$`.
+9. **Keep `UVICORN_WORKERS=2` on small instances.** Four workers on 1 GB of RAM leads to out-of-memory kills.
+10. **Keep two compose files only.** The files are `docker-compose.dev.yml` and `docker-compose.prod.yml`.
+11. **Watch the disk.** Run `docker system df` now and then. The pipeline prunes old images on every deploy.
+12. **Check Actions after every push.** A green run means the stack is healthy. A red run tells you which step failed.
+
+---
+
+## Troubleshooting
+
+Always run server commands from `/opt/splitter/Splitter`.
+
+Handy alias for the long compose command:
+
+```bash
+cd /opt/splitter/Splitter
+DC="docker compose --env-file .env --env-file .images.env -f docker-compose.prod.yml"
+$DC ps
+$DC logs api --tail=100
+```
+
+### "password authentication failed for user ..."
+
+The password inside the database volume differs from the one in `.env`. This is rule 3.
+
+Option A, keep your data. Reset the password inside the container, which trusts local connections:
+
+```bash
+cd /opt/splitter/Splitter
+getenv() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed -e 's/^"//;s/"$//' -e "s/^'//;s/'$//"; }
+U="$(getenv POSTGRES_USER)"; PW="$(getenv POSTGRES_PASSWORD)"; DB="$(getenv POSTGRES_DB)"
+
+# find a role that already exists in the volume
+ADMIN=""
+for cand in "$U" postgres splitter_user; do
+  docker exec splitter_postgres_prod psql -U "$cand" -d postgres -tAc 'select 1' >/dev/null 2>&1 && { ADMIN="$cand"; break; }
+done
+echo "using role: $ADMIN"
+
+# create or update the role from .env
+docker exec -i splitter_postgres_prod psql -U "$ADMIN" -d postgres -v ON_ERROR_STOP=1 -v u="$U" -v pw="$PW" <<'SQL'
+SELECT format('CREATE ROLE %I LOGIN SUPERUSER PASSWORD %L', :'u', :'pw')
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'u')
+\gexec
+SELECT format('ALTER ROLE %I WITH LOGIN SUPERUSER PASSWORD %L', :'u', :'pw')
+\gexec
+SQL
+
+# list databases and check that yours is there
+docker exec -i splitter_postgres_prod psql -U "$ADMIN" -d postgres -c '\l'
+```
+
+The deploy job does this automatically when the login test fails, so re-running the failed workflow is often enough.
+
+Option B, start fresh. This deletes all data:
+
+```bash
+cd /opt/splitter/Splitter
+docker compose --env-file .env -f docker-compose.prod.yml down
+docker volume rm splitter-prod_postgres_prod_data
+```
+
+### "role ... does not exist" or "role root does not exist"
+
+You ran `psql` without a user, or the user in `.env` was never created in this volume. Use the commands above, which try the usual role names and create the missing one.
+
+### The pipeline uses different settings than the ones you edited
+
+You have two copies of the project. Look for them:
+
+```bash
+ls -la /opt/splitter/.env /opt/splitter/Splitter/.env ~/splitter/.env 2>&1
+```
+
+Keep only `/opt/splitter/Splitter/.env`. Rename any other with `sudo mv file file.old`.
+
+### The deploy fails at "API did not become healthy"
+
+```bash
+$DC logs api --tail=100
+```
+
+Common causes: a wrong value in `.env`, a database login problem (see above), a migration error, or `curl` missing from the API image (the health check uses it).
+
+### Nginx will not start and the logs mention a directory
+
+Docker creates a folder if a mounted file is missing. Fix:
+
+```bash
+cd /opt/splitter/Splitter
+rm -rf nginx-selfsigned.crt nginx-selfsigned.key
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout nginx-selfsigned.key -out nginx-selfsigned.crt -subj "/CN=localhost"
+$DC up -d nginx
+```
+
+### "no space left on device"
+
+```bash
+docker system df
+docker image prune -af
+docker builder prune -af
+```
+
+### Containers keep restarting or get killed
+
+Check memory with `free -m`. Make sure the swap file from step 2 is active (`swapon --show`) and `UVICORN_WORKERS=2`.
+
+### A pull fails with "unauthorized"
+
+The `GHCR_TOKEN` secret is missing, expired, or lacks `read:packages`. Create a new token and update the secret.
+
+### Roll back by hand
+
+Each deploy stores image tags in `.images.env`. To run an older version, edit that file to point at an older commit tag and run:
+
+```bash
+$DC pull
+$DC up -d
 ```
 
 ---
 
-### 2. Production Deployment
+## API reference
 
-The production configuration uses lean multi-stage builds, non-root system users, Uvicorn multi-workers, and Next.js standalone output:
+Interactive docs are at `/docs` (Swagger) and `/redoc`.
 
-```bash
-# Build and run the production stack in detached mode
-docker compose -f docker-compose.prod.yml up -d --build
+### Authentication (`/api/v1/auth`)
 
-# View container logs
-docker compose -f docker-compose.prod.yml logs -f
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/register` | Create an account and send a verification code |
+| POST | `/verify` | Verify email with the 6-digit code |
+| POST | `/resend-verification` | Send a new verification code |
+| POST | `/login` | Log in with email and password |
+| POST | `/refresh` | Get a new access token (uses the refresh cookie) |
+| POST | `/logout` | Revoke the refresh token and clear the cookie |
+| POST | `/forgot-password` | Request a password reset code |
+| POST | `/reset-password` | Set a new password with the code |
 
-# Verify service health
-docker compose -f docker-compose.prod.yml ps
+### Users (`/api/v1/users`)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/me` | Current user and profile |
+| PATCH | `/me/profile` | Update phone, bio, currency, payment handle |
+
+### Groups (`/api/v1/groups`)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/` | Create a group (you become admin) |
+| GET | `/` | List your groups |
+| GET | `/{group_id}` | Group details with members |
+| POST | `/join` | Join with an invite code |
+| POST | `/{group_id}/members` | Add a member by email |
+| GET | `/{group_id}/members` | List members and roles |
+
+### Expenses (`/api/v1/groups`)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/{group_id}/expenses` | Add an expense (`EQUAL`, `EXACT`, `PERCENTAGE`, `SHARES`) |
+| GET | `/{group_id}/expenses` | List expenses with their splits |
+| GET | `/{group_id}/expenses/{expense_id}` | One expense |
+| DELETE | `/{group_id}/expenses/{expense_id}` | Delete (payer or admin) |
+| GET | `/{group_id}/balances` | Net balance of every member |
+
+### Settlements and activity (`/api/v1/groups`)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/{group_id}/settlements` | Record a payment between members |
+| GET | `/{group_id}/settlements` | Payment history |
+| GET | `/{group_id}/simplify-debts` | Minimum set of payments to settle everything |
+| GET | `/{group_id}/activities` | Timeline of group events |
+
+---
+
+## Frontend
+
+The frontend is a Next.js App Router project in `frontend/`, using TypeScript, Tailwind, TanStack Query for server data, and Zustand for auth state.
+
+### How login works
+
+- The access token is returned in the JSON response and kept in memory (Zustand).
+- The refresh token is set as an HttpOnly, SameSite=Lax cookie. JavaScript cannot read it, so a script injected into the page cannot steal it.
+- If several requests get a `401` at the same moment, the client sends exactly one refresh request. The others wait for it and then retry with the new token.
+- Refresh tokens rotate. Each refresh blacklists the old token ID in Redis, and logout blacklists the current one.
+
+### Layout
+
+```
+frontend/src/
+├── app/
+│   ├── (auth)/         login, register, verify-email, forgot-password, reset-password
+│   ├── (dashboard)/    dashboard, groups, group detail, expense forms, balances, profile
+│   └── page.tsx        landing page
+├── components/         ui primitives, layout, auth guard, group and settlement dialogs
+├── features/           API calls, hooks and Zod schemas for each area
+├── lib/api/            Axios client, refresh coordinator, error normalizer
+├── providers/          query and auth providers
+├── stores/             Zustand auth store
+└── types/              API types
 ```
 
 ---
 
-## 🧪 Testing
+## Testing
 
-### Backend Test Suite (Pytest)
-
-Covers registration, email verification, cookie login, session refresh, token revocation on logout, rate limiting lockout, split precision arithmetic, and greedy debt simplification:
+Backend:
 
 ```bash
 uv run pytest -v
 ```
 
-### Frontend Test Suite (Vitest)
+It covers registration, verification, login with cookies, refresh and logout, rate limiting and lockout, split arithmetic, and debt simplification.
 
-Covers Zustand client authentication state, concurrent token refresh deduplication (verifying exactly 1 request for concurrent 401s), session expiration handling, and expense split mathematics:
+Frontend:
 
 ```bash
 cd frontend
 npm test
-```
-
-### Frontend Production Type Checking & Build Validation
-
-```bash
-cd frontend
+npx tsc --noEmit
 npm run build
 ```
 
 ---
 
-## 🗄 Database Migrations (Alembic)
+## Database migrations
 
 ```bash
-# Generate a new migration script
-uv run alembic revision --autogenerate -m "Add new column"
-
-# Apply all migrations to the database
-uv run alembic upgrade head
-
-# Rollback last migration
-uv run alembic downgrade -1
-
-# Show current migration revision
-uv run alembic current
+uv run alembic revision --autogenerate -m "describe change"   # create
+uv run alembic upgrade head                                    # apply
+uv run alembic downgrade -1                                    # undo the last one
+uv run alembic current                                         # show the current revision
 ```
+
+In production the API container applies migrations on start, and the pipeline runs `alembic upgrade head` once more after the stack is healthy.
 
 ---
 
-## 📄 License
+## License
 
-This project is licensed under the MIT License.
-
+MIT
