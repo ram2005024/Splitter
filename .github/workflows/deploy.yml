@@ -6,26 +6,24 @@ on:
     branches:
       - main
       - master
+
   pull_request:
     branches:
       - main
       - master
+
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: splitter-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  # --------------------------------------------------
+  # ==========================================
   # 1. BACKEND TESTS
-  # --------------------------------------------------
+  # ==========================================
   test-backend:
-    name: Test Backend
+    name: Backend Tests
     runs-on: ubuntu-latest
 
     services:
@@ -54,7 +52,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Install uv
@@ -62,13 +60,13 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Set up Python
+      - name: Install Python
         run: uv python install 3.11
 
-      - name: Install backend dependencies
+      - name: Install dependencies
         run: uv sync --dev
 
-      - name: Compile Python files
+      - name: Compile Python
         run: uv run python -m compileall -q app
 
       - name: Check application imports
@@ -80,9 +78,9 @@ jobs:
           REDIS_URL: "redis://localhost:6379/0"
           CELERY_BROKER_URL: "redis://localhost:6379/1"
           CELERY_RESULT_BACKEND: "redis://localhost:6379/2"
-        run: uv run python -c "import app.main; print('Application imports OK')"
+        run: uv run python -c "import app.main; print('Application import successful')"
 
-      - name: Verify Alembic migrations
+      - name: Test Alembic migrations
         env:
           ENVIRONMENT: test
           DEBUG: "True"
@@ -92,9 +90,9 @@ jobs:
           uv run alembic upgrade head
           uv run alembic current
 
-      - name: Run Test Suite
+      - name: Run backend tests
         env:
-          ENVIRONMENT: "test"
+          ENVIRONMENT: test
           DEBUG: "True"
           SECRET_KEY: "test-ci-secret-key-12345678901234567890123456789012"
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
@@ -103,11 +101,11 @@ jobs:
           CELERY_RESULT_BACKEND: "redis://localhost:6379/2"
         run: uv run pytest -v --tb=short
 
-  # --------------------------------------------------
+  # ==========================================
   # 2. FRONTEND TESTS
-  # --------------------------------------------------
+  # ==========================================
   test-frontend:
-    name: Test Frontend
+    name: Frontend Tests
     runs-on: ubuntu-latest
 
     defaults:
@@ -115,17 +113,17 @@ jobs:
         working-directory: frontend
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install frontend dependencies
+      - name: Install dependencies
         run: npm ci
 
       - name: TypeScript check
@@ -136,13 +134,13 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
         run: npm run build
 
-  # --------------------------------------------------
+  # ==========================================
   # 3. BUILD AND PUSH DOCKER IMAGES
-  # Only push images for successful pushes to main/master.
-  # --------------------------------------------------
+  # ==========================================
   build-and-push:
     name: Build and Push Images
     runs-on: ubuntu-latest
+
     needs:
       - test-backend
       - test-frontend
@@ -153,13 +151,13 @@ jobs:
        github.ref == 'refs/heads/master')
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -167,41 +165,42 @@ jobs:
           password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Normalize image owner
-        id: image
+        id: owner
         shell: bash
         run: |
-          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push backend image
+      - name: Build and push backend
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ steps.image.outputs.owner }}/splitter-api:${{ github.sha }}
-            ghcr.io/${{ steps.image.outputs.owner }}/splitter-api:latest
+            ghcr.io/${{ steps.owner.outputs.name }}/splitter-api:${{ github.sha }}
+            ghcr.io/${{ steps.owner.outputs.name }}/splitter-api:latest
           cache-from: type=gha,scope=splitter-api
           cache-to: type=gha,mode=max,scope=splitter-api
 
-      - name: Build and push frontend image
+      - name: Build and push frontend
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ steps.image.outputs.owner }}/splitter-frontend:${{ github.sha }}
-            ghcr.io/${{ steps.image.outputs.owner }}/splitter-frontend:latest
+            ghcr.io/${{ steps.owner.outputs.name }}/splitter-frontend:${{ github.sha }}
+            ghcr.io/${{ steps.owner.outputs.name }}/splitter-frontend:latest
           cache-from: type=gha,scope=splitter-frontend
           cache-to: type=gha,mode=max,scope=splitter-frontend
 
-  # --------------------------------------------------
-  # 4. DEPLOY TO EC2
-  # --------------------------------------------------
+  # ==========================================
+  # 4. DEPLOY TO AWS EC2
+  # ==========================================
   deploy-ec2:
     name: Deploy to EC2
     runs-on: ubuntu-latest
+
     needs: build-and-push
 
     steps:
@@ -224,10 +223,10 @@ jobs:
             APP_DIR="/opt/splitter/Splitter"
             cd "$APP_DIR"
 
-            echo "Checking production configuration..."
+            echo "Checking production environment..."
 
             test -f .env || {
-              echo "ERROR: Production .env file is missing."
+              echo "ERROR: .env file not found"
               exit 1
             }
 
@@ -238,11 +237,11 @@ jobs:
               }
             done
 
-            echo "Logging in to GitHub Container Registry..."
-            echo "$GHCR_TOKEN" | docker login ghcr.io \
-              -u "$GHCR_USERNAME" --password-stdin
-
             IMAGE_OWNER_LOWER="$(printf '%s' "$IMAGE_OWNER" | tr '[:upper:]' '[:lower:]')"
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io \
+              --username "$GHCR_USERNAME" \
+              --password-stdin
 
             cat > .images.env <<EOF
             BACKEND_IMAGE=ghcr.io/${IMAGE_OWNER_LOWER}/splitter-api:${IMAGE_TAG}
@@ -253,7 +252,7 @@ jobs:
 
             DC="docker compose --env-file .env --env-file .images.env -f docker-compose.prod.yml"
 
-            echo "Pulling production images..."
+            echo "Pulling new images..."
             $DC pull api frontend
 
             echo "Starting database and Redis..."
@@ -261,6 +260,7 @@ jobs:
 
             echo "Waiting for PostgreSQL..."
             DB_READY=0
+
             for i in $(seq 1 30); do
               if docker exec splitter_postgres_prod \
                 sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
@@ -268,20 +268,22 @@ jobs:
                 DB_READY=1
                 break
               fi
+
               sleep 2
             done
 
             if [ "$DB_READY" -ne 1 ]; then
-              echo "ERROR: PostgreSQL did not become ready."
+              echo "ERROR: PostgreSQL did not become ready"
               docker logs --tail 100 splitter_postgres_prod || true
               exit 1
             fi
 
-            echo "Starting application services..."
+            echo "Starting application..."
             $DC up -d
 
             echo "Waiting for API health..."
             API_READY=0
+
             for i in $(seq 1 60); do
               STATUS="$(docker inspect \
                 --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
@@ -293,7 +295,7 @@ jobs:
               fi
 
               if [ "$STATUS" = "unhealthy" ] || [ "$STATUS" = "exited" ]; then
-                echo "ERROR: API container status is $STATUS"
+                echo "ERROR: API container status: $STATUS"
                 docker logs --tail 150 splitter_api_prod || true
                 exit 1
               fi
@@ -302,7 +304,7 @@ jobs:
             done
 
             if [ "$API_READY" -ne 1 ]; then
-              echo "ERROR: API did not become healthy."
+              echo "ERROR: API health check timed out"
               docker logs --tail 150 splitter_api_prod || true
               exit 1
             fi
@@ -310,9 +312,9 @@ jobs:
             echo "Applying database migrations..."
             $DC exec -T api alembic upgrade head
 
-            echo "Verifying migration version..."
+            echo "Verifying current migration..."
             $DC exec -T api alembic current
 
-            echo "Deployment completed successfully."
+            echo "Deployment successful"
 
             docker image prune -f
