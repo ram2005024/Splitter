@@ -169,9 +169,11 @@ jobs:
 
   # ===========================================================================
   # 4. DEPLOY TO AWS EC2
+  #    - project folder fixed at /opt/splitter/Splitter
   #    - uses the server's own .env (never edited by CI)
   #    - pulls the exact images built by this commit
-  #    - rolls back to the previous images if the new ones fail
+  #    - syncs the DB role password with .env when the volume is out of date
+  #    - rolls back to previous images if the new ones fail
   #    - removes unused images and build cache afterwards
   # ===========================================================================
   deploy-ec2:
@@ -215,12 +217,8 @@ jobs:
           script: |
             set -euo pipefail
 
-            echo "--- [1/9] Locate project directory (the one holding the real .env) ---"
-            APP_DIR=""
-            for d in /opt/splitter "$HOME/splitter"; do
-              if [ -f "$d/.env" ]; then APP_DIR="$d"; break; fi
-            done
-            APP_DIR="${APP_DIR:-$HOME/splitter}"
+            echo "--- [1/9] Project directory (fixed) ---"
+            APP_DIR="/opt/splitter/Splitter"
             mkdir -p "$APP_DIR"
             cd "$APP_DIR"
             echo "Using $APP_DIR"
@@ -245,11 +243,6 @@ jobs:
             if grep -Eqi 'generate_a_strong|your-github-username|change_me|changeme' .env; then
               echo "::error::.env still contains placeholder values"; exit 1
             fi
-            getenv() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed -e 's/^"//;s/"$//' -e "s/^'//;s/'$//"; }
-            PGUSER="$(getenv POSTGRES_USER)"
-            PGDB="$(getenv POSTGRES_DB)"
-            export PGPASSWORD="$(getenv POSTGRES_PASSWORD)"
-            echo "  POSTGRES_USER=$PGUSER  POSTGRES_DB=$PGDB"
 
             # Nginx mounts these. If missing, Docker creates directories in
             # their place and nginx fails to start.
@@ -259,8 +252,8 @@ jobs:
                 -keyout nginx-selfsigned.key -out nginx-selfsigned.crt -subj "/CN=localhost"
             fi
 
-            # Image tags live in .images.env (separate from .env). It is loaded
-            # after .env, so it wins. The previous copy is kept for rollback.
+            # Image tags live in .images.env (separate from .env) and win over
+            # .env because they are loaded last. The previous copy is kept for rollback.
             [ -f .images.env ] && cp .images.env .images.env.prev || : > .images.env.prev
             printf 'GHCR_IMAGE_API=%s\nGHCR_IMAGE_FRONTEND=%s\n' \
               "$NEW_API_IMAGE" "$NEW_FRONTEND_IMAGE" > .images.env
@@ -289,17 +282,53 @@ jobs:
             echo "$GHCR_TOKEN" | $DOCKER_BIN login ghcr.io -u "$GHCR_USER" --password-stdin
             $DC pull
 
-            echo "--- [6/9] Start data services and verify the DB credentials in .env ---"
+            echo "--- [6/9] Start data services and sync DB credentials with .env ---"
             $DC up -d postgres redis
             for i in $(seq 1 30); do
               [ "$($DOCKER_BIN inspect -f '{{.State.Health.Status}}' splitter_postgres_prod 2>/dev/null)" = healthy ] && break
               sleep 2
             done
-            if ! $DOCKER_BIN run --rm --network splitter-prod_splitter_prod_net -e PGPASSWORD \
-                 postgres:16-alpine psql -h postgres -U "$PGUSER" -d "$PGDB" -tAc 'select 1' >/dev/null; then
-              echo "::error::Postgres rejected the credentials in .env. The data volume was created with different values (Postgres reads them only on first init). Reset the user password inside the container, or recreate the volume."
-              exit 1
+
+            # The exact values Compose gave the container (and will give the API)
+            PGUSER="$($DOCKER_BIN exec splitter_postgres_prod printenv POSTGRES_USER)"
+            PGDB="$($DOCKER_BIN exec splitter_postgres_prod printenv POSTGRES_DB)"
+            PGPW="$($DOCKER_BIN exec splitter_postgres_prod printenv POSTGRES_PASSWORD)"
+            echo "  POSTGRES_USER=$PGUSER  POSTGRES_DB=$PGDB"
+
+            db_login_ok() {
+              $DOCKER_BIN run --rm --network splitter-prod_splitter_prod_net -e PGPASSWORD="$PGPW" \
+                postgres:16-alpine psql -h postgres -U "$PGUSER" -d "$PGDB" -tAc 'select 1' >/dev/null 2>&1
+            }
+
+            if ! db_login_ok; then
+              echo "Login failed. The volume holds an older user or password. Syncing to .env..."
+
+              # Local socket logins inside the container are trusted, so find any role that exists
+              ADMIN=""
+              for cand in "$PGUSER" postgres splitter_user; do
+                if $DOCKER_BIN exec splitter_postgres_prod psql -U "$cand" -d postgres -tAc 'select 1' >/dev/null 2>&1; then
+                  ADMIN="$cand"; break
+                fi
+              done
+              [ -n "$ADMIN" ] || { echo "::error::No usable role found in the data volume. Recreate the volume (docker volume rm splitter-prod_postgres_prod_data) or set POSTGRES_USER to the original superuser."; exit 1; }
+              echo "  Using existing role: $ADMIN"
+
+              printf '%s\n' \
+                "SELECT format('CREATE ROLE %I LOGIN SUPERUSER PASSWORD %L', :'u', :'pw') WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'u')" \
+                '\gexec' \
+                "SELECT format('ALTER ROLE %I WITH LOGIN SUPERUSER PASSWORD %L', :'u', :'pw')" \
+                '\gexec' \
+              | $DOCKER_BIN exec -i splitter_postgres_prod psql -U "$ADMIN" -d postgres -v ON_ERROR_STOP=1 -v u="$PGUSER" -v pw="$PGPW"
+
+              if ! $DOCKER_BIN exec splitter_postgres_prod psql -U "$ADMIN" -d postgres -tAc \
+                   "SELECT 1 FROM pg_database WHERE datname='$PGDB'" | grep -q 1; then
+                echo "Database $PGDB missing, creating it..."
+                $DOCKER_BIN exec splitter_postgres_prod psql -U "$ADMIN" -d postgres -c "CREATE DATABASE \"$PGDB\" OWNER \"$PGUSER\";"
+              fi
             fi
+
+            db_login_ok || { echo "::error::Postgres still rejects the credentials after syncing."; exit 1; }
+            echo "Database credentials OK."
 
             echo "--- [7/9] Deploy the full stack ---"
             $DC up -d --remove-orphans || fail_and_rollback "docker compose up failed"

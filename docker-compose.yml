@@ -1,4 +1,0 @@
-name: splitter-prod
-
-include:
-  - docker-compose.prod.yml
