@@ -3,437 +3,316 @@ name: Splitter CI/CD Pipeline
 
 on:
   push:
-    branches: ["main", "master"]
+    branches:
+      - main
+      - master
   pull_request:
-    branches: ["main", "master"]
+    branches:
+      - main
+      - master
   workflow_dispatch:
-
-# Only cancel superseded PR runs.
-# Never cancel an active main/master deployment.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
   packages: write
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_API: ghcr.io/ram2005024/splitter-api
-  IMAGE_FRONTEND: ghcr.io/ram2005024/splitter-frontend
+concurrency:
+  group: splitter-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # ============================================================
+  # --------------------------------------------------
   # 1. BACKEND TESTS
-  # ============================================================
+  # --------------------------------------------------
   test-backend:
-    name: Test Backend (FastAPI & Alembic)
+    name: Test Backend
     runs-on: ubuntu-latest
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: splitter_test_db
         ports:
-          - "5432:5432"
+          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d splitter_test_db"
-          --health-interval 5s
+          --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
       redis:
         image: redis:7-alpine
         ports:
-          - "6379:6379"
+          - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 5s
+          --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          version: "latest"
           enable-cache: true
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Set up Python
+        run: uv python install 3.11
 
-      - name: Install Dependencies
+      - name: Install backend dependencies
         run: uv sync --dev
 
-      - name: Bytecode & Module Syntax Validation
-        run: |
-          uv run python -m compileall app tests
-          uv run python -c "from app.main import app; print('FastAPI loaded successfully!')"
+      - name: Compile Python files
+        run: uv run python -m compileall -q app
 
-      - name: Test Alembic Migrations
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/splitter_test_db
-        run: uv run alembic upgrade head
-
-      - name: Run Test Suite
+      - name: Check application imports
         env:
           ENVIRONMENT: test
           DEBUG: "True"
-          SECRET_KEY: test-ci-secret-key-12345678901234567890123456789012
-          DATABASE_URL: sqlite+aiosqlite:///:memory:
-          REDIS_URL: redis://localhost:6379/0
-          CELERY_BROKER_URL: redis://localhost:6379/1
-          CELERY_RESULT_BACKEND: redis://localhost:6379/2
+          SECRET_KEY: "test-ci-secret-key-12345678901234567890123456789012"
+          DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/splitter_test_db"
+          REDIS_URL: "redis://localhost:6379/0"
+          CELERY_BROKER_URL: "redis://localhost:6379/1"
+          CELERY_RESULT_BACKEND: "redis://localhost:6379/2"
+        run: uv run python -c "import app.main; print('Application imports OK')"
+
+      - name: Verify Alembic migrations
+        env:
+          ENVIRONMENT: test
+          DEBUG: "True"
+          SECRET_KEY: "test-ci-secret-key-12345678901234567890123456789012"
+          DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/splitter_test_db"
+        run: |
+          uv run alembic upgrade head
+          uv run alembic current
+
+      - name: Run Test Suite
+        env:
+          ENVIRONMENT: "test"
+          DEBUG: "True"
+          SECRET_KEY: "test-ci-secret-key-12345678901234567890123456789012"
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          REDIS_URL: "redis://localhost:6379/0"
+          CELERY_BROKER_URL: "redis://localhost:6379/1"
+          CELERY_RESULT_BACKEND: "redis://localhost:6379/2"
         run: uv run pytest -v --tb=short
 
-  # ============================================================
+  # --------------------------------------------------
   # 2. FRONTEND TESTS
-  # ============================================================
+  # --------------------------------------------------
   test-frontend:
-    name: Test Frontend (TypeScript & Next.js Build)
+    name: Test Frontend
     runs-on: ubuntu-latest
 
     defaults:
       run:
-        working-directory: ./frontend
+        working-directory: frontend
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install Dependencies
-        run: npm ci --legacy-peer-deps
+      - name: Install frontend dependencies
+        run: npm ci
 
-      - name: TypeScript Type Checking
+      - name: TypeScript check
         run: npx tsc --noEmit
 
-      - name: Build Next.js Application
-        run: npm run build
+      - name: Build frontend
         env:
           NEXT_TELEMETRY_DISABLED: "1"
-          NODE_ENV: production
+        run: npm run build
 
-  # ============================================================
-  # 3. BUILD AND PUSH IMAGES
-  # ============================================================
+  # --------------------------------------------------
+  # 3. BUILD AND PUSH DOCKER IMAGES
+  # Only push images for successful pushes to main/master.
+  # --------------------------------------------------
   build-and-push:
-    name: Build & Push Images to GHCR
+    name: Build and Push Images
     runs-on: ubuntu-latest
-    needs: [test-backend, test-frontend]
+    needs:
+      - test-backend
+      - test-frontend
+
     if: >-
-      github.event_name == 'push' &&
+      github.event_name != 'pull_request' &&
       (github.ref == 'refs/heads/main' ||
        github.ref == 'refs/heads/master')
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Build & Push API Image
+      - name: Normalize image owner
+        id: image
+        shell: bash
+        run: |
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile
-          target: production
+          file: Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_API }}:latest
-            ${{ env.IMAGE_API }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ghcr.io/${{ steps.image.outputs.owner }}/splitter-api:${{ github.sha }}
+            ghcr.io/${{ steps.image.outputs.owner }}/splitter-api:latest
+          cache-from: type=gha,scope=splitter-api
+          cache-to: type=gha,mode=max,scope=splitter-api
 
-      - name: Build & Push Frontend Image
+      - name: Build and push frontend image
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_FRONTEND }}:latest
-            ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ghcr.io/${{ steps.image.outputs.owner }}/splitter-frontend:${{ github.sha }}
+            ghcr.io/${{ steps.image.outputs.owner }}/splitter-frontend:latest
+          cache-from: type=gha,scope=splitter-frontend
+          cache-to: type=gha,mode=max,scope=splitter-frontend
 
-  # ============================================================
-  # 4. DEPLOY TO AWS EC2
-  # ============================================================
+  # --------------------------------------------------
+  # 4. DEPLOY TO EC2
+  # --------------------------------------------------
   deploy-ec2:
-    name: Deploy to AWS EC2
+    name: Deploy to EC2
     runs-on: ubuntu-latest
-    needs: [build-and-push]
-    if: >-
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' ||
-       github.ref == 'refs/heads/master')
+    needs: build-and-push
 
     steps:
-      - name: Check for EC2 Secrets
-        id: check-secrets
+      - name: Deploy application
+        uses: appleboy/ssh-action@v1.2.0
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-        run: |
-          if [ -n "$EC2_HOST" ] && [ -n "$EC2_SSH_KEY" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::EC2_HOST or EC2_SSH_KEY is missing. Skipping deployment."
-          fi
-
-      - name: Deploy on AWS EC2
-        if: steps.check-secrets.outputs.configured == 'true'
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.repository_owner }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          NEW_API_IMAGE: ${{ env.IMAGE_API }}:${{ github.sha }}
-          NEW_FRONTEND_IMAGE: ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ github.sha }}
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME || 'ubuntu' }}
+          username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_PORT || 22 }}
-          command_timeout: 20m
-          envs: GH_TOKEN,GHCR_USER,GHCR_TOKEN,NEW_API_IMAGE,NEW_FRONTEND_IMAGE,REPO,BRANCH
+          envs: GHCR_USERNAME,GHCR_TOKEN,IMAGE_OWNER,IMAGE_TAG
+          script_stop: true
           script: |
-            set -euo pipefail
+            set -eu
 
-            echo "--- [1/9] Project directory ---"
             APP_DIR="/opt/splitter/Splitter"
-            mkdir -p "$APP_DIR"
             cd "$APP_DIR"
 
-            echo "--- [2/9] Sync repository code ---"
-            [ -d .git ] || git init -q
-            git remote remove origin 2>/dev/null || true
-            git remote add origin "https://github.com/${REPO}.git"
+            echo "Checking production configuration..."
 
-            AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-            git -c "http.extraheader=AUTHORIZATION: basic ${AUTH}" \
-              fetch --depth 1 origin "$BRANCH"
-            git reset --hard FETCH_HEAD
-
-            echo "--- [3/9] Validate server environment ---"
-            if [ ! -f .env ]; then
-              if [ -f .env.production.example ]; then
-                cp .env.production.example .env
-              fi
-              echo "::error::.env is missing. Configure real production values and rerun."
+            test -f .env || {
+              echo "ERROR: Production .env file is missing."
               exit 1
-            fi
+            }
 
-            for k in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB SECRET_KEY; do
-              grep -Eq "^${k}=.+" .env || {
-                echo "::error::$k is missing or empty in .env"
+            for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB SECRET_KEY; do
+              grep -qE "^${key}=.+" .env || {
+                echo "ERROR: Missing or empty ${key} in .env"
                 exit 1
               }
             done
 
-            if grep -Eqi 'generate_a_strong|your-github-username|change_me|changeme' .env; then
-              echo "::error::.env contains placeholder values"
-              exit 1
-            fi
+            echo "Logging in to GitHub Container Registry..."
+            echo "$GHCR_TOKEN" | docker login ghcr.io \
+              -u "$GHCR_USERNAME" --password-stdin
 
-            # Create self-signed certificates if they are missing.
-            if [ ! -f nginx-selfsigned.crt ] || [ ! -f nginx-selfsigned.key ]; then
-              rm -f nginx-selfsigned.crt nginx-selfsigned.key
-              openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-                -keyout nginx-selfsigned.key \
-                -out nginx-selfsigned.crt \
-                -subj "/CN=localhost"
-            fi
+            IMAGE_OWNER_LOWER="$(printf '%s' "$IMAGE_OWNER" | tr '[:upper:]' '[:lower:]')"
 
-            # Save the previous image references for rollback.
-            if [ -f .images.env ]; then
-              cp .images.env .images.env.prev
-            else
-              : > .images.env.prev
-            fi
+            cat > .images.env <<EOF
+            BACKEND_IMAGE=ghcr.io/${IMAGE_OWNER_LOWER}/splitter-api:${IMAGE_TAG}
+            FRONTEND_IMAGE=ghcr.io/${IMAGE_OWNER_LOWER}/splitter-frontend:${IMAGE_TAG}
+            EOF
 
-            printf 'GHCR_IMAGE_API=%s\nGHCR_IMAGE_FRONTEND=%s\n' \
-              "$NEW_API_IMAGE" "$NEW_FRONTEND_IMAGE" > .images.env
+            chmod 600 .images.env
 
-            DOCKER_BIN="docker"
-            if ! docker info >/dev/null 2>&1; then
-              DOCKER_BIN="sudo -E docker"
-            fi
+            DC="docker compose --env-file .env --env-file .images.env -f docker-compose.prod.yml"
 
-            DC="$DOCKER_BIN compose --env-file .env --env-file .images.env -f docker-compose.prod.yml"
+            echo "Pulling production images..."
+            $DC pull api frontend
 
-            fail_and_rollback() {
-              echo "::error::$1"
-
-              if [ -s .images.env.prev ]; then
-                echo "Rolling back to previous image references..."
-                cp .images.env.prev .images.env
-                $DC up -d --remove-orphans || true
-              fi
-
-              $DC ps || true
-              $DC logs api --tail=60 || true
-              exit 1
-            }
-
-            echo "--- [4/9] Free disk space ---"
-            $DOCKER_BIN image prune -af >/dev/null || true
-            $DOCKER_BIN system df || true
-
-            echo "--- [5/9] Pull deployment images ---"
-            echo "$GHCR_TOKEN" | $DOCKER_BIN login ghcr.io \
-              -u "$GHCR_USER" --password-stdin
-            $DC pull
-
-            echo "--- [6/9] Start PostgreSQL and Redis ---"
+            echo "Starting database and Redis..."
             $DC up -d postgres redis
 
-            PG_READY=0
+            echo "Waiting for PostgreSQL..."
+            DB_READY=0
             for i in $(seq 1 30); do
-              STATUS="$($DOCKER_BIN inspect -f '{{.State.Health.Status}}' \
-                splitter_postgres_prod 2>/dev/null || echo none)"
-              if [ "$STATUS" = "healthy" ]; then
-                PG_READY=1
+              if docker exec splitter_postgres_prod \
+                sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+                >/dev/null 2>&1; then
+                DB_READY=1
                 break
               fi
               sleep 2
             done
 
-            [ "$PG_READY" = 1 ] || {
-              echo "::error::PostgreSQL did not become healthy"
-              $DC logs postgres --tail=80 || true
+            if [ "$DB_READY" -ne 1 ]; then
+              echo "ERROR: PostgreSQL did not become ready."
+              docker logs --tail 100 splitter_postgres_prod || true
               exit 1
-            }
-
-            PGUSER="$($DOCKER_BIN exec splitter_postgres_prod printenv POSTGRES_USER)"
-            PGDB="$($DOCKER_BIN exec splitter_postgres_prod printenv POSTGRES_DB)"
-            PGPW="$($DOCKER_BIN exec splitter_postgres_prod printenv POSTGRES_PASSWORD)"
-
-            echo "Configured PostgreSQL user: $PGUSER"
-            echo "Configured PostgreSQL database: $PGDB"
-
-            db_login_ok() {
-              $DOCKER_BIN run --rm \
-                --network splitter-prod_splitter_prod_net \
-                -e PGPASSWORD="$PGPW" \
-                postgres:16-alpine \
-                psql -h postgres -U "$PGUSER" -d "$PGDB" -tAc 'select 1' \
-                >/dev/null 2>&1
-            }
-
-            if ! db_login_ok; then
-              echo "Database credentials differ from the configured environment. Attempting role sync..."
-
-              ADMIN=""
-              for cand in "$PGUSER" postgres splitter_user; do
-                if $DOCKER_BIN exec splitter_postgres_prod \
-                  psql -U "$cand" -d postgres -tAc 'select 1' \
-                  >/dev/null 2>&1; then
-                  ADMIN="$cand"
-                  break
-                fi
-              done
-
-              if [ -z "$ADMIN" ]; then
-                echo "::error::No usable PostgreSQL administrator found. Check the existing volume credentials."
-                exit 1
-              fi
-
-              printf '%s\n' \
-                "SELECT format('CREATE ROLE %I LOGIN SUPERUSER PASSWORD %L', :'u', :'pw') WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'u')" \
-                '\gexec' \
-                "SELECT format('ALTER ROLE %I WITH LOGIN SUPERUSER PASSWORD %L', :'u', :'pw')" \
-                '\gexec' \
-                | $DOCKER_BIN exec -i splitter_postgres_prod \
-                    psql -U "$ADMIN" -d postgres \
-                    -v ON_ERROR_STOP=1 -v u="$PGUSER" -v pw="$PGPW"
-
-              DB_EXISTS="$($DOCKER_BIN exec splitter_postgres_prod \
-                psql -U "$ADMIN" -d postgres -tAc \
-                "SELECT 1 FROM pg_database WHERE datname='$PGDB'")"
-
-              if [ "$DB_EXISTS" != "1" ]; then
-                echo "Creating missing database: $PGDB"
-                $DOCKER_BIN exec splitter_postgres_prod \
-                  psql -U "$ADMIN" -d postgres \
-                  -c "CREATE DATABASE \"$PGDB\" OWNER \"$PGUSER\";"
-              fi
             fi
 
-            db_login_ok || {
-              echo "::error::PostgreSQL login failed after credential synchronization"
-              exit 1
-            }
-
-            echo "PostgreSQL credentials verified."
-
-            echo "--- [7/9] Deploy application containers ---"
-            $DC up -d --remove-orphans || fail_and_rollback "docker compose up failed"
+            echo "Starting application services..."
+            $DC up -d
 
             echo "Waiting for API health..."
-            HEALTHY=0
-
-            for i in $(seq 1 40); do
-              STATUS="$($DOCKER_BIN inspect -f '{{.State.Health.Status}}' \
-                splitter_api_prod 2>/dev/null || echo none)"
+            API_READY=0
+            for i in $(seq 1 60); do
+              STATUS="$(docker inspect \
+                --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+                splitter_api_prod 2>/dev/null || true)"
 
               if [ "$STATUS" = "healthy" ]; then
-                HEALTHY=1
+                API_READY=1
                 break
               fi
 
-              sleep 3
+              if [ "$STATUS" = "unhealthy" ] || [ "$STATUS" = "exited" ]; then
+                echo "ERROR: API container status is $STATUS"
+                docker logs --tail 150 splitter_api_prod || true
+                exit 1
+              fi
+
+              sleep 5
             done
 
-            if [ "$HEALTHY" != 1 ]; then
-              fail_and_rollback "API did not become healthy"
+            if [ "$API_READY" -ne 1 ]; then
+              echo "ERROR: API did not become healthy."
+              docker logs --tail 150 splitter_api_prod || true
+              exit 1
             fi
 
-            echo "--- [8/9] Apply Alembic migrations ---"
-            $DC exec -T api alembic upgrade head \
-              || fail_and_rollback "Alembic migration failed"
+            echo "Applying database migrations..."
+            $DC exec -T api alembic upgrade head
 
-            echo "Checking applied migration..."
-            $DC exec -T api alembic current \
-              || fail_and_rollback "Could not verify Alembic revision"
+            echo "Verifying migration version..."
+            $DC exec -T api alembic current
 
-            $DC restart nginx || true
+            echo "Deployment completed successfully."
 
-            echo "--- [9/9] Cleanup ---"
-            $DOCKER_BIN container prune -f || true
-            $DOCKER_BIN image prune -af || true
-            $DOCKER_BIN builder prune -af || true
-
-            # Do not delete PostgreSQL or Redis volumes.
-            $DOCKER_BIN logout ghcr.io || true
-            rm -f .images.env.prev
-
-            echo "--- Disk usage ---"
-            $DOCKER_BIN system df || true
-
-            echo "--- Running containers ---"
-            $DC ps
-
-            echo "--- Deployed images ---"
-            cat .images.env
-
-            echo "=== Splitter deployed successfully ==="
+            docker image prune -f
