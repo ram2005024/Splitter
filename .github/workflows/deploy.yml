@@ -7,9 +7,11 @@ on:
     branches: ["main", "master"]
   workflow_dispatch:
 
+# Only cancel superseded PR runs. A second push to main must never kill a
+# deploy that is already running on the server.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -22,7 +24,7 @@ env:
 
 jobs:
   # ===========================================================================
-  # 1. BACKEND TEST & LINT SUITE
+  # 1. BACKEND TEST & LINT
   # ===========================================================================
   test-backend:
     name: Test Backend (FastAPI & Alembic)
@@ -93,7 +95,7 @@ jobs:
         run: uv run pytest -v --tb=short
 
   # ===========================================================================
-  # 2. FRONTEND VALIDATION & BUILD SUITE
+  # 2. FRONTEND VALIDATION & BUILD
   # ===========================================================================
   test-frontend:
     name: Test Frontend (TypeScript & Next.js Build)
@@ -126,7 +128,7 @@ jobs:
           NODE_ENV: "production"
 
   # ===========================================================================
-  # 3. BUILD & PUSH DOCKER IMAGES TO GITHUB CONTAINER REGISTRY (GHCR)
+  # 3. BUILD & PUSH IMAGES TO GHCR
   # ===========================================================================
   build-and-push:
     name: Build & Push Images to GHCR
@@ -141,17 +143,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry (GHCR)
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Downcase Repository & Owner for Image Tags
-        run: |
-          echo "OWNER_LOWER=${GITHUB_REPOSITORY_OWNER,,}" >> ${GITHUB_ENV}
-          echo "REPO_LOWER=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
 
       - name: Build & Push API Image
         uses: docker/build-push-action@v6
@@ -161,12 +158,8 @@ jobs:
           target: production
           push: true
           tags: |
-            ghcr.io/${{ env.OWNER_LOWER }}/splitter-api:latest
-            ghcr.io/${{ env.OWNER_LOWER }}/splitter-api:${{ github.sha }}
-            ghcr.io/${{ env.REPO_LOWER }}/splitter-api:latest
-            ghcr.io/${{ env.REPO_LOWER }}/splitter-api:${{ github.sha }}
-            ghcr.io/ram2005024/splitter-api:latest
-            ghcr.io/ram2005024/splitter-api:${{ github.sha }}
+            ${{ env.IMAGE_API }}:latest
+            ${{ env.IMAGE_API }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -177,17 +170,13 @@ jobs:
           file: ./frontend/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ env.OWNER_LOWER }}/splitter-frontend:latest
-            ghcr.io/${{ env.OWNER_LOWER }}/splitter-frontend:${{ github.sha }}
-            ghcr.io/${{ env.REPO_LOWER }}/splitter-frontend:latest
-            ghcr.io/${{ env.REPO_LOWER }}/splitter-frontend:${{ github.sha }}
-            ghcr.io/ram2005024/splitter-frontend:latest
-            ghcr.io/ram2005024/splitter-frontend:${{ github.sha }}
+            ${{ env.IMAGE_FRONTEND }}:latest
+            ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   # ===========================================================================
-  # 4. CONTINUOUS DEPLOYMENT TO AWS EC2 VIA SSH
+  # 4. DEPLOY TO AWS EC2 VIA SSH
   # ===========================================================================
   deploy-ec2:
     name: Deploy to AWS EC2
@@ -198,142 +187,108 @@ jobs:
     steps:
       - name: Check for EC2 Secrets
         id: check-secrets
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
-          if [ -n "${{ secrets.EC2_HOST }}" ] && [ -n "${{ secrets.EC2_SSH_KEY }}" ]; then
-            echo "configured=true" >> $GITHUB_OUTPUT
+          if [ -n "$EC2_HOST" ] && [ -n "$EC2_SSH_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
           else
-            echo "configured=false" >> $GITHUB_OUTPUT
-            echo "::warning::EC2_HOST or EC2_SSH_KEY secret not found. Skipping EC2 deployment step. See README for EC2 setup instructions."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::EC2_HOST or EC2_SSH_KEY secret not found. Skipping deployment."
           fi
 
       - name: Deploy Containers on AWS EC2
         if: steps.check-secrets.outputs.configured == 'true'
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          GHCR_IMAGE_API: ${{ env.IMAGE_API }}:${{ github.sha }}
+          GHCR_IMAGE_FRONTEND: ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
+          envs: GH_TOKEN,GHCR_USER,GHCR_TOKEN,GHCR_IMAGE_API,GHCR_IMAGE_FRONTEND,REPO,BRANCH
           script: |
-            set -e
-            echo "─── [1/6] Navigating to or Initializing Project Directory ───"
-            TARGET_DIR=""
-            if [ -d "/opt/splitter/.git" ] || ([ -d "/opt/splitter" ] && [ -w "/opt/splitter" ]); then
-              TARGET_DIR="/opt/splitter"
-            elif [ -d "$HOME/splitter" ]; then
-              TARGET_DIR="$HOME/splitter"
-            elif [ -d "/opt/splitter" ]; then
-              sudo chown -R $(whoami):$(whoami) /opt/splitter 2>/dev/null || true
-              if [ -w "/opt/splitter" ]; then
-                TARGET_DIR="/opt/splitter"
-              else
-                TARGET_DIR="$HOME/splitter"
-              fi
-            else
-              TARGET_DIR="$HOME/splitter"
+            set -euo pipefail
+
+            echo "--- [1/7] Locate project directory (prefer the one holding the real .env) ---"
+            APP_DIR=""
+            for d in /opt/splitter "$HOME/splitter"; do
+              if [ -f "$d/.env" ]; then APP_DIR="$d"; break; fi
+            done
+            APP_DIR="${APP_DIR:-$HOME/splitter}"
+            mkdir -p "$APP_DIR"
+            cd "$APP_DIR"
+            echo "Using $APP_DIR"
+
+            echo "--- [2/7] Sync code (token is not stored in .git/config) ---"
+            [ -d .git ] || git init -q
+            git remote remove origin 2>/dev/null || true
+            git remote add origin "https://github.com/${REPO}.git"
+            AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+            git -c "http.extraheader=AUTHORIZATION: basic ${AUTH}" fetch --depth 1 origin "$BRANCH"
+            git reset --hard FETCH_HEAD
+
+            echo "--- [3/7] Validate .env (never modified by CI) ---"
+            if [ ! -f .env ]; then
+              [ -f .env.production.example ] && cp .env.production.example .env
+              echo "::error::.env did not exist in $APP_DIR. A template was created. Fill in real values, then re-run."
+              exit 1
+            fi
+            cp .env .env.bak
+            for k in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB SECRET_KEY; do
+              grep -Eq "^${k}=.+" .env || { echo "::error::$k is missing or empty in .env"; exit 1; }
+            done
+            if grep -Eqi 'generate_a_strong|your-github-username|change_me|changeme' .env; then
+              echo "::error::.env still contains placeholder values"; exit 1
+            fi
+            getenv() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed -e 's/^"//;s/"$//' -e "s/^'//;s/'$//"; }
+            PGUSER="$(getenv POSTGRES_USER)"; PGDB="$(getenv POSTGRES_DB)"
+            export PGPASSWORD="$(getenv POSTGRES_PASSWORD)"
+            echo "  POSTGRES_USER=$PGUSER  POSTGRES_DB=$PGDB"
+
+            # Nginx mounts these files. If they are missing, Docker creates
+            # directories in their place and nginx fails to start.
+            if [ ! -f nginx-selfsigned.crt ] || [ ! -f nginx-selfsigned.key ]; then
+              rm -rf nginx-selfsigned.crt nginx-selfsigned.key
+              openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+                -keyout nginx-selfsigned.key -out nginx-selfsigned.crt -subj "/CN=localhost"
             fi
 
-            mkdir -p "$TARGET_DIR"
-            cd "$TARGET_DIR"
-
-            REPO_URL="https://ram2005024:${{ secrets.GITHUB_TOKEN }}@github.com/ram2005024/Splitter.git"
-
-            if [ ! -d ".git" ]; then
-              echo "Git repository not found in $TARGET_DIR. Initializing repository..."
-              git init
-              git remote add origin "$REPO_URL" || git remote set-url origin "$REPO_URL"
-            else
-              echo "Existing git repository found. Updating remote credentials..."
-              git remote set-url origin "$REPO_URL" || true
-            fi
-
-            echo "─── [2/6] Syncing Latest Repository Code ───"
-            TARGET_BRANCH="${{ github.ref_name }}"
-            [ -z "$TARGET_BRANCH" ] && TARGET_BRANCH="master"
-            git fetch origin "$TARGET_BRANCH" --depth 1 || git fetch origin "$TARGET_BRANCH"
-            git reset --hard "origin/$TARGET_BRANCH"
-
-            OWNER_LOWER="ram2005024"
-
-            if [ ! -f ".env" ]; then
-              echo "Notice: .env not found on EC2. Initializing from .env.production.example..."
-              if [ -f ".env.production.example" ]; then
-                cp .env.production.example .env
-              elif [ -f ".env.example" ]; then
-                cp .env.example .env
-              fi
-            fi
-
-            # Automatically configure ram2005024 and sanitize .env
-            if [ -f ".env" ]; then
-              sed -i "s|ghcr.io/your-github-username|ghcr.io/ram2005024|g" .env
-              sed -i "s|your-github-username|ram2005024|g" .env
-              grep -q "^GHCR_IMAGE_API=" .env && sed -i "s|^GHCR_IMAGE_API=.*|GHCR_IMAGE_API=ghcr.io/ram2005024/splitter-api:latest|g" .env || echo "GHCR_IMAGE_API=ghcr.io/ram2005024/splitter-api:latest" >> .env
-              grep -q "^GHCR_IMAGE_FRONTEND=" .env && sed -i "s|^GHCR_IMAGE_FRONTEND=.*|GHCR_IMAGE_FRONTEND=ghcr.io/ram2005024/splitter-frontend:latest|g" .env || echo "GHCR_IMAGE_FRONTEND=ghcr.io/ram2005024/splitter-frontend:latest" >> .env
-
-              # Ensure postgres credentials align with database container
-              if grep -q "generate_a_strong_database_password_here" .env; then
-                sed -i "s|generate_a_strong_database_password_here|postgres|g" .env
-                sed -i "s|POSTGRES_USER=splitter_user|POSTGRES_USER=postgres|g" .env
-                sed -i "s|splitter_user:postgres|postgres:postgres|g" .env
-              fi
-              # Ensure workers are set safely for t2/t3.micro
-              sed -i "s|UVICORN_WORKERS=4|UVICORN_WORKERS=2|g" .env
-            fi
-
-            # Export all variables from .env so docker compose interpolation never falls back to defaults
-            if [ -f ".env" ]; then
-              set -a
-              . ./.env
-              set +a
-            fi
-
-            # Explicitly export the exact GHCR images for docker compose
-            export GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest"
-            export GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest"
-
-            echo "─── Verifying Resolved Configuration ───"
-            echo "  POSTGRES_USER  : ${POSTGRES_USER}"
-            echo "  POSTGRES_DB    : ${POSTGRES_DB}"
-            echo "  DATABASE_URL   : ${DATABASE_URL}" | sed 's|://[^:]*:[^@]*@|://***:***@|'
-
-            # Auto-detect whether docker command requires sudo
             DOCKER_BIN="docker"
-            if ! docker info >/dev/null 2>&1; then
-              if sudo -n docker info >/dev/null 2>&1 || sudo docker info >/dev/null 2>&1; then
-                DOCKER_BIN="sudo -E docker"
-              fi
+            if ! docker info >/dev/null 2>&1; then DOCKER_BIN="sudo -E docker"; fi
+            DC="$DOCKER_BIN compose --env-file .env -f docker-compose.prod.yml"
+
+            echo "--- [4/7] Login to GHCR and pull ---"
+            echo "$GHCR_TOKEN" | $DOCKER_BIN login ghcr.io -u "$GHCR_USER" --password-stdin
+            $DC pull
+
+            echo "--- [5/7] Start data services and verify DB credentials ---"
+            $DC up -d postgres redis
+            for i in $(seq 1 30); do
+              [ "$($DOCKER_BIN inspect -f '{{.State.Health.Status}}' splitter_postgres_prod 2>/dev/null)" = healthy ] && break
+              sleep 2
+            done
+            if ! $DOCKER_BIN run --rm --network splitter-prod_splitter_prod_net -e PGPASSWORD \
+                 postgres:16-alpine psql -h postgres -U "$PGUSER" -d "$PGDB" -tAc 'select 1' >/dev/null; then
+              echo "::error::Postgres rejected the credentials in .env. The data volume was probably created with different values (Postgres only reads them on first init)."
+              exit 1
             fi
 
-            echo "─── [3/6] Authenticating Docker with GHCR ───"
-            GHCR_PASS="${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}"
-            echo "$GHCR_PASS" | $DOCKER_BIN login ghcr.io -u "ram2005024" --password-stdin || true
+            echo "--- [6/7] Deploy full stack and migrate ---"
+            $DC up -d --remove-orphans
+            $DC restart nginx
+            $DC exec -T api alembic upgrade head
 
-            echo "─── [4/6] Pulling Latest Container Images ───"
-            GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest" GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest" $DOCKER_BIN compose --env-file .env -f docker-compose.prod.yml pull || $DOCKER_BIN compose pull
-
-            echo "─── [5/6] Deploying Stack ───"
-            GHCR_IMAGE_API="ghcr.io/ram2005024/splitter-api:latest" GHCR_IMAGE_FRONTEND="ghcr.io/ram2005024/splitter-frontend:latest" $DOCKER_BIN compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans || $DOCKER_BIN compose up -d --remove-orphans
-
-            # Brief pause and restart nginx to ensure fresh upstream resolution
-            sleep 3
-            $DOCKER_BIN compose -f docker-compose.prod.yml restart nginx || true
-
-            echo "─── [6/6] Executing Database Migrations & Status Inspection ───"
-            $DOCKER_BIN compose -f docker-compose.prod.yml exec -T api alembic upgrade head || true
-
-            echo "─── Purging Superseded & Unused Docker Images ───"
-            $DOCKER_BIN container prune -f || true
+            echo "--- [7/7] Cleanup and status ---"
             $DOCKER_BIN image prune -af || true
-            $DOCKER_BIN builder prune -af || true
-
-            echo "─── Docker Disk Usage Summary ───"
-            $DOCKER_BIN system df || true
-
-            echo "─── Container Health & Status ───"
-            $DOCKER_BIN compose -f docker-compose.prod.yml ps
-
-            echo "─── API Logs (Recent) ───"
-            $DOCKER_BIN compose -f docker-compose.prod.yml logs api --tail=25 || true
-
-            echo "=== Splitter deployed successfully to EC2! ==="
+            $DC ps
+            $DC logs api --tail=25
+            echo "=== Splitter deployed successfully ==="
