@@ -119,7 +119,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -138,7 +138,7 @@ jobs:
   # 3. BUILD AND PUSH DOCKER IMAGES
   # ==========================================
   build-and-push:
-    name: Build and Push Images
+    name: Build and Push Docker Images
     runs-on: ubuntu-latest
 
     needs:
@@ -157,12 +157,12 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GHCR
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ secrets.GHCR_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Normalize image owner
         id: owner
@@ -170,11 +170,13 @@ jobs:
         run: |
           echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push backend
+      # Backend API Dockerfile: docker/Dockerfile
+      # Build context remains repository root.
+      - name: Build and push backend API
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: ./docker/Dockerfile
           push: true
           tags: |
             ghcr.io/${{ steps.owner.outputs.name }}/splitter-api:${{ github.sha }}
@@ -182,6 +184,20 @@ jobs:
           cache-from: type=gha,scope=splitter-api
           cache-to: type=gha,mode=max,scope=splitter-api
 
+      # Celery Dockerfile: docker/Dockerfile.celery
+      - name: Build and push Celery worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile.celery
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.name }}/splitter-celery:${{ github.sha }}
+            ghcr.io/${{ steps.owner.outputs.name }}/splitter-celery:latest
+          cache-from: type=gha,scope=splitter-celery
+          cache-to: type=gha,mode=max,scope=splitter-celery
+
+      # Frontend Dockerfile: frontend/Dockerfile
       - name: Build and push frontend
         uses: docker/build-push-action@v6
         with:
@@ -226,7 +242,7 @@ jobs:
             echo "Checking production environment..."
 
             test -f .env || {
-              echo "ERROR: .env file not found"
+              echo "ERROR: Production .env file is missing"
               exit 1
             }
 
@@ -239,12 +255,14 @@ jobs:
 
             IMAGE_OWNER_LOWER="$(printf '%s' "$IMAGE_OWNER" | tr '[:upper:]' '[:lower:]')"
 
+            echo "Logging in to GHCR..."
             echo "$GHCR_TOKEN" | docker login ghcr.io \
               --username "$GHCR_USERNAME" \
               --password-stdin
 
             cat > .images.env <<EOF
             BACKEND_IMAGE=ghcr.io/${IMAGE_OWNER_LOWER}/splitter-api:${IMAGE_TAG}
+            CELERY_IMAGE=ghcr.io/${IMAGE_OWNER_LOWER}/splitter-celery:${IMAGE_TAG}
             FRONTEND_IMAGE=ghcr.io/${IMAGE_OWNER_LOWER}/splitter-frontend:${IMAGE_TAG}
             EOF
 
@@ -252,10 +270,13 @@ jobs:
 
             DC="docker compose --env-file .env --env-file .images.env -f docker-compose.prod.yml"
 
-            echo "Pulling new images..."
-            $DC pull api frontend
+            echo "Validating Docker Compose configuration..."
+            $DC config --quiet
 
-            echo "Starting database and Redis..."
+            echo "Pulling production images..."
+            $DC pull api frontend celery_worker celery_beat
+
+            echo "Starting PostgreSQL and Redis..."
             $DC up -d postgres redis
 
             echo "Waiting for PostgreSQL..."
@@ -278,7 +299,7 @@ jobs:
               exit 1
             fi
 
-            echo "Starting application..."
+            echo "Starting application services..."
             $DC up -d
 
             echo "Waiting for API health..."
@@ -309,7 +330,7 @@ jobs:
               exit 1
             fi
 
-            echo "Applying database migrations..."
+            echo "Applying Alembic migrations..."
             $DC exec -T api alembic upgrade head
 
             echo "Verifying current migration..."
