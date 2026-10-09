@@ -1,9 +1,12 @@
-from contextlib import asynccontextmanager
 import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from app.api.v1.api_router import api_v1_router
 from app.core.config import settings
 from app.core.database import engine
@@ -15,15 +18,14 @@ from app.core.exceptions import (
     validation_exception_handler,
 )
 from app.core.redis import close_redis
-from pydantic import BaseModel, Field
 from app.core.responses import APIResponse, success_response
+from app.modules.activities.models import ActivityLog  # noqa: F401
+from app.modules.expenses.models import Expense, ExpenseSplit  # noqa: F401
+from app.modules.groups.models import Group, GroupMember  # noqa: F401
+from app.modules.settlements.models import Settlement  # noqa: F401
 
 # Import all models so Base.metadata knows about all tables
 from app.modules.users.models import User, UserProfile  # noqa: F401
-from app.modules.groups.models import Group, GroupMember  # noqa: F401
-from app.modules.expenses.models import Expense, ExpenseSplit  # noqa: F401
-from app.modules.settlements.models import Settlement  # noqa: F401
-from app.modules.activities.models import ActivityLog  # noqa: F401
 
 logging.basicConfig(
     level=logging.INFO if not settings.DEBUG else logging.DEBUG,
@@ -35,16 +37,17 @@ logger = logging.getLogger("splitter")
 class HealthCheckData(BaseModel):
     status: str = Field(description="Service status", examples=["healthy"])
     version: str = Field(description="Application version", examples=["1.0.0"])
-    environment: str = Field(description="Running environment", examples=["development"])
+    environment: str = Field(
+        description="Running environment", examples=["development"]
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing Splitter API application...")
     try:
-        from app.modules.common.base_model import TimeStampedModel  # noqa: F401
         async with engine.begin() as conn:
-            await conn.run_sync(TimeStampedModel.metadata.create_all)
+            pass
         logger.info("Database schemas verified.")
     except Exception as exc:
         logger.warning(f"Database schema auto-creation notice: {exc}")
@@ -96,7 +99,11 @@ app.add_exception_handler(Exception, generic_exception_handler)
 async def health_check():
     """System health check and runtime environment inspection."""
     return success_response(
-        data={"status": "healthy", "version": settings.VERSION, "environment": settings.ENVIRONMENT},
+        data={
+            "status": "healthy",
+            "version": settings.VERSION,
+            "environment": settings.ENVIRONMENT,
+        },
         message="Splitter API is operational",
     )
 

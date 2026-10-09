@@ -1,17 +1,18 @@
 import asyncio
 from logging.config import fileConfig
+
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
-from alembic import context
 
+from alembic import context
 from app.core.config import settings
+from app.modules.activities.models import ActivityLog  # noqa
 from app.modules.common.base_model import Base
-from app.modules.users.models import User, UserProfile
-from app.modules.groups.models import Group, GroupMember
-from app.modules.expenses.models import Expense, ExpenseSplit
-from app.modules.settlements.models import Settlement
-from app.modules.activities.models import ActivityLog
+from app.modules.expenses.models import Expense, ExpenseSplit  # noqa
+from app.modules.groups.models import Group, GroupMember  # noqa
+from app.modules.settlements.models import Settlement  # noqa
+from app.modules.users.models import User, UserProfile  # noqa
 
 # this is the Alembic Config object
 config = context.config
