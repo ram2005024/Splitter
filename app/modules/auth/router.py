@@ -1,5 +1,5 @@
-from typing import Optional
 from fastapi import APIRouter, Depends, Request, status
+
 from app.api.dependencies import get_client_ip, get_current_user, get_services
 from app.core.responses import APIResponse, success_response
 from app.core.security import clear_refresh_cookie, set_refresh_cookie
@@ -72,7 +72,9 @@ async def resend_verification(
     services: ServiceFactory = Depends(get_services),
 ):
     """Generates a new verification OTP and re-dispatches the verification email."""
-    await services.auth_service.resend_verification(email=req.email, client_ip=client_ip)
+    await services.auth_service.resend_verification(
+        email=req.email, client_ip=client_ip
+    )
     return success_response(
         message="Verification code resent successfully. Please check your inbox.",
     )
@@ -89,7 +91,9 @@ async def login(
     services: ServiceFactory = Depends(get_services),
 ):
     """Authenticates user credentials, sets HttpOnly refresh cookie, and returns access token + user details."""
-    token_response, refresh_token = await services.auth_service.login(req, client_ip=client_ip)
+    token_response, refresh_token = await services.auth_service.login(
+        req, client_ip=client_ip
+    )
     res = success_response(
         data=token_response.model_dump(mode="json"),
         message="Login successful",
@@ -105,7 +109,7 @@ async def login(
 )
 async def refresh_token(
     request: Request,
-    req: Optional[RefreshTokenRequest] = None,
+    req: RefreshTokenRequest | None = None,
     services: ServiceFactory = Depends(get_services),
 ):
     """Extracts refresh token from HttpOnly cookie or body, rotates it, sets new cookie, and returns new access token."""
@@ -115,7 +119,10 @@ async def refresh_token(
     if not token:
         raise InvalidCredentialsException("Refresh token missing. Please log in.")
 
-    token_response, new_refresh_token = await services.auth_service.refresh_access_token(token)
+    (
+        token_response,
+        new_refresh_token,
+    ) = await services.auth_service.refresh_access_token(token)
     res = success_response(
         data=token_response.model_dump(mode="json"),
         message="Token refreshed successfully",
@@ -131,7 +138,7 @@ async def refresh_token(
 )
 async def logout(
     request: Request,
-    req: Optional[LogoutRequest] = None,
+    req: LogoutRequest | None = None,
     services: ServiceFactory = Depends(get_services),
 ):
     """Invalidates the refresh token in Redis and removes the HttpOnly session cookie."""
@@ -194,4 +201,3 @@ async def reset_password(
     return success_response(
         message="Password has been reset successfully. You can now log in with your new password.",
     )
-

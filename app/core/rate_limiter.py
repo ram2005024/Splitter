@@ -1,5 +1,5 @@
-from typing import Optional
 import redis.asyncio as aioredis
+
 from app.core.config import settings
 from app.core.exceptions import RateLimitException
 
@@ -15,7 +15,7 @@ class RedisLimiter:
             current_count = await redis.incr(key)
             if current_count == 1:
                 await redis.expire(key, settings.RATE_LIMIT_REGISTER_WINDOW_SECONDS)
-            
+
             if current_count > settings.RATE_LIMIT_REGISTER_PER_IP:
                 ttl = await redis.ttl(key)
                 raise RateLimitException(
@@ -48,9 +48,11 @@ class RedisLimiter:
             attempts = await redis.incr(key)
             if attempts == 1:
                 await redis.expire(key, settings.RATE_LIMIT_LOGIN_LOCKOUT_SECONDS)
-            
+
             if attempts >= settings.RATE_LIMIT_LOGIN_MAX_FAILED_ATTEMPTS:
-                await redis.setex(lock_key, settings.RATE_LIMIT_LOGIN_LOCKOUT_SECONDS, "locked")
+                await redis.setex(
+                    lock_key, settings.RATE_LIMIT_LOGIN_LOCKOUT_SECONDS, "locked"
+                )
                 await redis.delete(key)
             return attempts
         except aioredis.RedisError:
@@ -78,7 +80,7 @@ class RedisLimiter:
         await redis.setex(key, expire_minutes * 60, code)
 
     @staticmethod
-    async def get_verification_code(redis: aioredis.Redis, email: str) -> Optional[str]:
+    async def get_verification_code(redis: aioredis.Redis, email: str) -> str | None:
         key = f"verify_code:{email.lower()}"
         val = await redis.get(key)
         return val.decode("utf-8") if isinstance(val, bytes) else val
@@ -99,7 +101,7 @@ class RedisLimiter:
         await redis.setex(key, expire_minutes * 60, code)
 
     @staticmethod
-    async def get_password_reset_code(redis: aioredis.Redis, email: str) -> Optional[str]:
+    async def get_password_reset_code(redis: aioredis.Redis, email: str) -> str | None:
         key = f"pwd_reset_code:{email.lower()}"
         val = await redis.get(key)
         return val.decode("utf-8") if isinstance(val, bytes) else val
@@ -110,7 +112,9 @@ class RedisLimiter:
         await redis.delete(key)
 
     @staticmethod
-    async def revoke_token(redis: aioredis.Redis, jti: str, ttl_seconds: int = 86400 * 7) -> None:
+    async def revoke_token(
+        redis: aioredis.Redis, jti: str, ttl_seconds: int = 86400 * 7
+    ) -> None:
         """Blacklist a refresh token by its JTI in Redis until expiration."""
         key = f"revoked_token:{jti}"
         try:
@@ -126,4 +130,3 @@ class RedisLimiter:
             return bool(await redis.exists(key))
         except aioredis.RedisError:
             return False
-

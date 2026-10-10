@@ -1,14 +1,10 @@
-from typing import List, Union
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
     )
 
     # Project Info
@@ -28,7 +24,7 @@ class Settings(BaseSettings):
     PASSWORD_RESET_CODE_EXPIRE_MINUTES: int = 15
 
     # CORS
-    ALLOWED_ORIGINS: Union[List[str], str] = [
+    ALLOWED_ORIGINS: list[str] | str = [
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:5173",
@@ -40,7 +36,7 @@ class Settings(BaseSettings):
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+    def assemble_cors_origins(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str) and not v.startswith("["):
             return [i.strip() for i in v.split(",") if i.strip()]
         elif isinstance(v, (list, str)):
@@ -72,7 +68,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_REGISTER_PER_IP: int = 5
     RATE_LIMIT_REGISTER_WINDOW_SECONDS: int = 900  # 15 minutes
     RATE_LIMIT_LOGIN_MAX_FAILED_ATTEMPTS: int = 5
-    RATE_LIMIT_LOGIN_LOCKOUT_SECONDS: int = 600   # 10 minutes lockout
+    RATE_LIMIT_LOGIN_LOCKOUT_SECONDS: int = 600  # 10 minutes lockout
 
     # Email / Notification Settings (Worker)
     SMTP_HOST: str = "mailpit"

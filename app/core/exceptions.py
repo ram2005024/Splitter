@@ -1,7 +1,9 @@
-from typing import Any, Optional
+from typing import Any
+
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from app.core.responses import error_response
 
 
@@ -11,7 +13,7 @@ class AppException(Exception):
         message: str,
         error_code: str = "INTERNAL_SERVER_ERROR",
         status_code: int = 500,
-        details: Optional[Any] = None,
+        details: Any | None = None,
     ):
         super().__init__(message)
         self.message = message
@@ -21,38 +23,69 @@ class AppException(Exception):
 
 
 class NotFoundException(AppException):
-    def __init__(self, message: str = "Resource not found", details: Optional[Any] = None):
-        super().__init__(message=message, error_code="NOT_FOUND", status_code=404, details=details)
+    def __init__(self, message: str = "Resource not found", details: Any | None = None):
+        super().__init__(
+            message=message, error_code="NOT_FOUND", status_code=404, details=details
+        )
 
 
 class ConflictException(AppException):
-    def __init__(self, message: str = "Resource already exists", details: Optional[Any] = None):
-        super().__init__(message=message, error_code="CONFLICT", status_code=409, details=details)
+    def __init__(
+        self, message: str = "Resource already exists", details: Any | None = None
+    ):
+        super().__init__(
+            message=message, error_code="CONFLICT", status_code=409, details=details
+        )
 
 
 class AuthenticationException(AppException):
-    def __init__(self, message: str = "Authentication failed", details: Optional[Any] = None):
-        super().__init__(message=message, error_code="AUTHENTICATION_FAILED", status_code=401, details=details)
+    def __init__(
+        self, message: str = "Authentication failed", details: Any | None = None
+    ):
+        super().__init__(
+            message=message,
+            error_code="AUTHENTICATION_FAILED",
+            status_code=401,
+            details=details,
+        )
 
 
 class ForbiddenException(AppException):
-    def __init__(self, message: str = "Permission denied", details: Optional[Any] = None):
-        super().__init__(message=message, error_code="FORBIDDEN", status_code=403, details=details)
+    def __init__(self, message: str = "Permission denied", details: Any | None = None):
+        super().__init__(
+            message=message, error_code="FORBIDDEN", status_code=403, details=details
+        )
 
 
 class ValidationException(AppException):
-    def __init__(self, message: str = "Validation failed", details: Optional[Any] = None):
-        super().__init__(message=message, error_code="VALIDATION_ERROR", status_code=422, details=details)
+    def __init__(self, message: str = "Validation failed", details: Any | None = None):
+        super().__init__(
+            message=message,
+            error_code="VALIDATION_ERROR",
+            status_code=422,
+            details=details,
+        )
 
 
 class RateLimitException(AppException):
-    def __init__(self, message: str = "Too many requests. Please try again later.", details: Optional[Any] = None):
-        super().__init__(message=message, error_code="RATE_LIMIT_EXCEEDED", status_code=429, details=details)
+    def __init__(
+        self,
+        message: str = "Too many requests. Please try again later.",
+        details: Any | None = None,
+    ):
+        super().__init__(
+            message=message,
+            error_code="RATE_LIMIT_EXCEEDED",
+            status_code=429,
+            details=details,
+        )
 
 
 class BadRequestException(AppException):
-    def __init__(self, message: str = "Bad request", details: Optional[Any] = None):
-        super().__init__(message=message, error_code="BAD_REQUEST", status_code=400, details=details)
+    def __init__(self, message: str = "Bad request", details: Any | None = None):
+        super().__init__(
+            message=message, error_code="BAD_REQUEST", status_code=400, details=details
+        )
 
 
 async def app_exception_handler(request: Request, exc: AppException):
@@ -88,11 +121,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     errors = []
     for err in exc.errors():
         field = ".".join(str(loc) for loc in err["loc"] if loc != "body")
-        errors.append({
-            "field": field or "root",
-            "message": err["msg"],
-            "type": err["type"],
-        })
+        errors.append(
+            {
+                "field": field or "root",
+                "message": err["msg"],
+                "type": err["type"],
+            }
+        )
     return error_response(
         message="Request validation error",
         error_code="VALIDATION_ERROR",

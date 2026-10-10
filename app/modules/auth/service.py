@@ -1,8 +1,9 @@
-from datetime import datetime, timezone
 import logging
-from typing import Optional
+from datetime import UTC, datetime
+
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
 from app.core.exceptions import NotFoundException
 from app.core.rate_limiter import RedisLimiter
@@ -79,7 +80,10 @@ class AuthService:
         profile = UserProfile(
             user_id=user.id,
             default_currency="NPR",
-            notification_settings={"email_on_expense": True, "email_on_settlement": True},
+            notification_settings={
+                "email_on_expense": True,
+                "email_on_settlement": True,
+            },
         )
         self.session.add(profile)
         await self.session.commit()
@@ -100,7 +104,9 @@ class AuthService:
                 first_name=user.first_name,
             )
         except Exception as exc:
-            logger.warning(f"Could not enqueue verification email task: {exc}. OTP is: {otp}")
+            logger.warning(
+                f"Could not enqueue verification email task: {exc}. OTP is: {otp}"
+            )
 
         return user
 
@@ -150,7 +156,9 @@ class AuthService:
         await RedisLimiter.check_login_lockout(self.redis, email)
 
         user = await self.user_repo.get_by_email(email)
-        if not user or not SecurityManager.verify_password(req.password, user.hashed_password):
+        if not user or not SecurityManager.verify_password(
+            req.password, user.hashed_password
+        ):
             attempts = await RedisLimiter.record_failed_login(self.redis, email)
             remaining = settings.RATE_LIMIT_LOGIN_MAX_FAILED_ATTEMPTS - attempts
             if remaining > 0:
@@ -180,18 +188,24 @@ class AuthService:
         )
         return token_response, refresh_token
 
-    async def refresh_access_token(self, refresh_token: str) -> tuple[TokenResponse, str]:
+    async def refresh_access_token(
+        self, refresh_token: str
+    ) -> tuple[TokenResponse, str]:
         try:
             payload = SecurityManager.decode_token(refresh_token)
             if payload.get("type") != "refresh":
-                raise InvalidCredentialsException("Invalid token type. Refresh token required.")
+                raise InvalidCredentialsException(
+                    "Invalid token type. Refresh token required."
+                )
             user_id = payload.get("sub")
             jti = payload.get("jti")
         except Exception:
             raise InvalidCredentialsException("Invalid or expired refresh token.")
 
         if jti and await RedisLimiter.is_token_revoked(self.redis, jti):
-            raise InvalidCredentialsException("Refresh token has been revoked. Please log in again.")
+            raise InvalidCredentialsException(
+                "Refresh token has been revoked. Please log in again."
+            )
 
         user = await self.user_repo.get_with_profile(user_id)
         if not user or not user.is_active:
@@ -200,8 +214,13 @@ class AuthService:
         # Revoke old refresh token (token rotation security)
         if jti:
             exp = payload.get("exp")
-            now_ts = int(datetime.now(timezone.utc).timestamp())
-            ttl = max(int(exp - now_ts) if exp else settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, 1)
+            now_ts = int(datetime.now(UTC).timestamp())
+            ttl = max(
+                int(exp - now_ts)
+                if exp
+                else settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+                1,
+            )
             await RedisLimiter.revoke_token(self.redis, jti, ttl)
 
         new_access_token = SecurityManager.create_access_token(subject=user.id)
@@ -216,7 +235,7 @@ class AuthService:
         )
         return token_response, new_refresh_token
 
-    async def logout(self, refresh_token: Optional[str] = None) -> None:
+    async def logout(self, refresh_token: str | None = None) -> None:
         if not refresh_token:
             return
         try:
@@ -224,8 +243,13 @@ class AuthService:
             jti = payload.get("jti")
             if jti:
                 exp = payload.get("exp")
-                now_ts = int(datetime.now(timezone.utc).timestamp())
-                ttl = max(int(exp - now_ts) if exp else settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, 1)
+                now_ts = int(datetime.now(UTC).timestamp())
+                ttl = max(
+                    int(exp - now_ts)
+                    if exp
+                    else settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+                    1,
+                )
                 await RedisLimiter.revoke_token(self.redis, jti, ttl)
         except Exception:
             pass
