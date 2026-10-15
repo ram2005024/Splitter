@@ -35,7 +35,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 className="font-semibold footer-credit-name"
                 style={{ color: "var(--text-secondary)" }}
               >
-                Cyrus
+                Cyrussdf
               </span>
             </p>
           </div>
